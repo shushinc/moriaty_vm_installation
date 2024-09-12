@@ -1,0 +1,172 @@
+---
+- name: Install PHP and required packages and portal installation
+  hosts: all
+  become: yes
+  vars:
+    database_name: "moriaty"
+    sql_username: "admin"
+    sql_password: "pass"  # Password for the admin user
+    root_password: "pass"  # MySQL root password
+    localhost: "10.128.15.252"
+  tasks:
+    - name: Update the package index on RHEL
+      yum:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: Install EPEL repository
+      yum:
+        name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+        state: present
+
+    - name: Install PHP and related packages
+      yum:
+        name:
+          - php
+          - php-cli
+          - php-fpm
+          - php-gd
+          - php-mysqlnd
+          - php-mbstring
+          - php-json
+          - php-common
+          - php-dba
+          - php-dbg
+          - php-devel
+          - php-embedded
+          - php-enchant
+          - php-bcmath
+          - php-gmp
+          - php-intl
+          - php-ldap
+          - php-odbc
+          - php-pdo
+          - php-opcache
+          - php-pear
+          - php-pgsql
+          - php-process
+          - php-snmp
+          - php-soap
+          - php-xml
+        state: present
+
+    - name: Install additional packages
+      yum:
+        name:
+          - git
+          - zip
+          - unzip
+          - wget
+          - yum-utils
+          - jq
+          - nfs-utils
+          - postgresql
+          - patch
+        state: present
+
+    # - name: Reset PHP module
+    #   yum:
+    #     name: php
+    #     state: absent
+    #     module: yes
+    #     module_state: reset
+
+    # - name: Install PHP 8.2 module
+    #   dnf:
+    #     name: php:8.2
+    #     state: present
+    - name: Enable PHP 8.2 module
+      command: dnf module enable php:8.2 -y
+
+    - name: Install PHP 8.2 and related packages
+      yum:
+        name:
+          - php-fpm
+          - php-cli
+          - php-mysqlnd
+          - php-json
+          - php-opcache
+          - php-xml
+          - php-mbstring
+          - php-gd
+          - php-curl
+          - php-bcmath
+        state: present
+
+
+    # - name: Install Composer via shell script
+    #   shell: |
+    #     export COMPOSER_VERSION="2.1.8"
+
+    #     echo "Install Composer dependencies"
+    #     wget https://getcomposer.org/download/${COMPOSER_VERSION}/composer.phar -O /usr/bin/composer
+    #     chmod +x /usr/bin/composer
+
+    #     echo "Composer $COMPOSER_VERSION installed successfully."
+      
+    #   # Optionally, you can register the output and debug it
+    #   register: composer_installation_output
+
+    - name: Ensure devportal user exists
+      user:
+        name: devportal
+        state: present
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Install Composer via shell script
+      shell: |
+        export COMPOSER_VERSION="2.7.9"
+
+        echo "Install Composer dependencies"
+        wget https://getcomposer.org/download/${COMPOSER_VERSION}/composer.phar -O /usr/bin/composer
+        chmod +x /usr/bin/composer
+
+      
+      # Optionally, you can register the output and debug it
+      register: composer_installation_output
+
+    - name: Display Composer installation output
+      debug:
+        msg: "{{ composer_installation_output.stdout }}"
+
+    - name: repositrory clone
+      become: yes
+      shell: |
+        cd /var/www/html
+        # rm -rf index.html
+        sudo git clone -b dev --single-branch https://Zebraconsultancyservices1:zcsgitpass@gitlab.com/devops193526/shushportal.git
+      args:
+        executable: /bin/bash  # Ensure that the shell script is run with bash
+
+      register: repoclone_output
+
+    - name: Display setup output
+      debug:
+        msg: "{{ repoclone_output.stdout }}"
+
+    
+    
+    - name: Configure Composer and install portal
+      shell: |
+        cd /var/www/html/shushportal
+        export COMPOSER_ALLOW_SUPERUSER=1
+        export COMPOSER_MEMORY_LIMIT=2G
+        /usr/bin/composer install --no-interaction
+      args:
+        executable: /bin/bash
+      register: composer_install_output
+
+    - name: Display Composer install output
+      debug:
+        msg: "{{ composer_install_output.stdout }}"
+
+    - name: Copy settings.php to default directory
+      become: yes
+      become_user: devportal
+      shell: |
+        cp /var/www/html/shushportal/portalassets/settings.php /var/www/html/shushportal/web/sites/default
+      args:
+        executable: /bin/bash
+    

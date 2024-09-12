@@ -1,0 +1,79 @@
+---
+- name: Install PHP, MySQL, and required packages, copy SQL file, and dump to MySQL database
+  hosts: all
+  become: yes
+  vars:
+    db_name: "moriaty"
+    db_user: "admin"
+    db_password: "pass"  # Password for the admin user
+    root_password: "pass"  # MySQL root password
+    sql_file_path: "/tmp/zcs_new.sql"  # Path to the SQL file
+
+  tasks:
+    - name: Update the package index on RHEL
+      dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: Install PHP and extensions on RHEL
+      dnf:
+        name: 
+          - php
+          - php-cli
+          - php-fpm
+          - php-gd
+          - php-mysqlnd
+          - php-mbstring
+          - php-json
+          - php-common
+          - php-dba
+          - php-dbg
+          - php-devel
+          - php-bcmath
+          - php-intl
+          - php-ldap
+          - php-opcache
+          - php-pear
+        state: present
+        update_cache: yes
+
+    - name: Install MySQL server
+      dnf:
+        name: mysql-server
+        state: present
+        update_cache: yes
+
+    - name: Ensure MySQL service is enabled and running
+      service:
+        name: mysqld
+        state: started
+        enabled: yes
+
+    - name: Copy SQL file to destination server
+      copy:
+        src: portalasserts/zcs_new.sql
+        dest: "{{ sql_file_path }}"
+        mode: '0644'
+
+    - name: Create MySQL database
+      mysql_db:
+        login_user: root
+        login_password: "{{ root_password }}"
+        name: "{{ db_name }}"
+        state: present
+
+    - name: Create MySQL user with access to the database
+      mysql_user:
+        login_user: root
+        login_password: "{{ root_password }}"
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        priv: "{{ db_name }}.*:ALL"
+        state: present
+
+    - name: Import SQL file into MySQL database
+      shell: >
+        mysql -u root -p{{ root_password }} {{ db_name }} < {{ sql_file_path }}
+      args:
+        chdir: /
