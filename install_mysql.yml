@@ -52,7 +52,7 @@
 
     - name: Copy SQL file to destination server
       copy:
-        src: portalasserts/zcs_new.sql
+        src: portal-asserts/zcs_new.sql
         dest: "{{ sql_file_path }}"
         mode: '0644'
 
