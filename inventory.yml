@@ -1,0 +1,15 @@
+---
+moriarty:
+  children:
+    dbs:
+      hosts:
+        10.128.15.252:
+    runtime:
+      hosts:
+        10.128.15.251:
+        10.128.15.253:
+
+  # Required Vars
+  vars:
+    ansible_port: 22
+    ansible_user: ansible

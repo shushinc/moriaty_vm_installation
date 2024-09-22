@@ -1,0 +1,109 @@
+---
+- name: Log output to a log file
+  lineinfile:
+    path: "{{ log_file }}"
+    line: "Starting script..."
+    state: present
+
+- name: Update package index and install required packages
+  apt:
+    update_cache: yes
+    name:
+      - wget
+      - git
+      - zip
+      - supervisor
+      - composer
+      - apache2
+      - php
+      - libapache2-mod-php
+      - php-cli
+      - php-fpm
+      - php-json
+      - php-common
+      - php-mysql
+      - php-zip
+      - php-gd
+      - php-intl
+      - php-mbstring
+      - php-curl
+      - php-xml
+      - php-pear
+      - php-tidy
+      - php-soap
+      - php-bcmath
+      - php-xmlrpc
+    state: present
+
+- name: Write portal-supervisor.ini
+  template:
+    src: portal-supervisor.conf.j2
+    dest: "{{ supervisor_config_file }}"
+  notify: Restart Supervisor
+
+
+- name: Restart Supervisor
+  systemd:
+    name: supervisor
+    state: restarted
+
+- name: Clone Git repository
+  git:
+    repo: "{{ git_repo }}"
+    dest: "/var/www/html/shushportal"
+    version: dev
+    force: yes
+
+- name: Install Composer dependencies
+  shell: |
+    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+    php composer-setup.php
+    php -r "unlink('composer-setup.php');"
+    mv composer.phar /usr/bin/composer
+  args:
+    chdir: /var/www/html/shushportal
+
+- name: Configure Apache
+  template:
+    src: shushportal.conf.j2
+    dest: "{{ apache_config_file }}"
+  notify:
+    - Enable site
+    - Restart Apache
+
+- name: Set permissions
+  file:
+    path: "/var/www/html/shushportal"
+    state: directory
+    recurse: yes
+    owner: www-data
+    group: www-data
+    mode: '775'
+
+- name: Run drush commands
+  shell: |
+    /var/www/html/shushportal/vendor/bin/drush cr
+    /var/www/html/shushportal/vendor/bin/drush cim -y
+    /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
+    /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
+    /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
+    /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
+    /var/www/html/shushportal/vendor/bin/drush updb
+    /var/www/html/shushportal/vendor/bin/drush cr
+
+- name: Log completion message
+  lineinfile:
+    path: "{{ log_file }}"
+    line: "Startup script completed successfully."
+    state: present
+
+# Handlers
+- name: Enable site
+  apache2_site:
+    name: shushportal.conf
+    state: enabled
+
+- name: Restart Apache
+  systemd:
+    name: apache2
+    state: restarted
