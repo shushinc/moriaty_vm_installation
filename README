@@ -1,0 +1,26 @@
+## System requirements
+
+The control node must have Ansible 8.0+ (ansible-core 2.15+)
+
+All managed nodes in inventory must have:
+
+Passwordless SSH access
+Root access (or a user with equivalent permissions)
+
+## Usage
+
+1. Start by cloning the repository:
+```bash
+git clone https://github.com/shushinc/moriaty_vm_installation.git
+```
+2. Edit the inventory file to add the `ansible_user` you created during the prerequisites:
+```bash
+vim inventory.yml
+
+ansible_user: ansible
+```
+3. In the root directory, run the Ansible playbook to provision the cluster:
+
+```bash
+ansible-playbook playbooks/site.yml -i inventory.yml
+```

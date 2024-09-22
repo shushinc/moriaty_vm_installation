@@ -1,0 +1,12 @@
+---
+- name: Setup Mysql DB
+  hosts: dbs
+  become: true
+  roles:
+    - role: dbs
+
+- name: Setup moriarty runtime
+  hosts: runtime
+  become: true
+  roles:
+    - role: runtime
