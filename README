@@ -22,5 +22,5 @@ ansible_user: ansible
 3. In the root directory, run the Ansible playbook to provision the cluster:
 
 ```bash
-ansible-playbook playbooks/site.yml -i inventory.yml
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql
 ```

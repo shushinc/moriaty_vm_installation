@@ -26,6 +26,10 @@
       - php-pear
     state: present
     update_cache: yes
+- name: Enable EPEL repository
+  dnf:
+    name: epel-release
+    state: present
 
 - name: Install Python 3
   dnf:
@@ -63,14 +67,12 @@
 - name: Create MySQL database
   mysql_db:
     login_user: root
-    login_password: "{{ root_password }}"
     name: "{{ db_name }}"
     state: present
 
 - name: Create MySQL user with access to the database
   mysql_user:
     login_user: root
-    login_password: "{{ root_password }}"
     name: "{{ db_user }}"
     password: "{{ db_password }}"
     priv: "{{ db_name }}.*:ALL"
@@ -78,6 +80,6 @@
 
 - name: Import SQL file into MySQL database
   shell: >
-    mysql -u root -p{{ root_password }} {{ db_name }} < {{ sql_file_path }}
+    mysql -u root {{ db_name }} < {{ sql_file_path }}
   args:
     chdir: /

@@ -4,9 +4,11 @@
   become: true
   roles:
     - role: dbs
+      tags: mysql
 
 - name: Setup moriarty runtime
   hosts: runtime
   become: true
   roles:
     - role: runtime
+      tags: moriarty

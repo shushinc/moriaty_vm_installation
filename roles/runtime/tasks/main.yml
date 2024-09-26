@@ -98,10 +98,11 @@
     state: present
 
 # Handlers
-- name: Enable site
-  apache2_site:
-    name: shushportal.conf
-    state: enabled
+# - name: Enable site
+#   #apache2_site:
+#   community.apache.apache2_site:
+#     name: shushportal.conf
+#     state: enabled
 
 - name: Restart Apache
   systemd:
