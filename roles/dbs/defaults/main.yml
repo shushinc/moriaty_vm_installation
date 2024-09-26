@@ -1,6 +1,6 @@
 ---
 db_name: "moriaty"
-db_user: "admin"
+db_user: "devportal"
 db_password: "pass"  # Password for the admin user
 root_password: "pass"  # MySQL root password
 sql_file_path: "/tmp/zcs_new.sql"  # Path to the SQL file

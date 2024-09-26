@@ -5,3 +5,10 @@ git_repo: "https://Zebraconsultancyservices1:zcsgitpass@gitlab.com/devops193526/
 apache_config_file: "/etc/apache2/sites-available/shushportal.conf"
 supervisor_config_file: "/etc/supervisor/conf.d/portal-supervisor.conf"
 composer_version: "2.1.8"
+nginx_conf: "/etc/nginx/nginx.conf"
+drupal_nginx_conf: "/etc/nginx/sites-enabled/drupal-nginx.conf"
+db_name: "moriaty"
+db_user: "devportal"
+db_password: "pass"  # Password for the admin user
+root_password: "pass"  # MySQL root password
+sql_file_path: "/tmp/zcs_new.sql"  # Path to the SQL file

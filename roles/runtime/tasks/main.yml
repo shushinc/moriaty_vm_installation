@@ -1,12 +1,45 @@
 ---
+- name: Update the package index on RHEL
+  dnf:
+    name: "*"
+    state: latest
+    update_cache: yes
+
+- name: Ensure log directory exists
+  file:
+    path: /var/log
+    state: directory
+    mode: '0755'
+
+- name: Create Log File
+  file:
+      path: "{{ log_file }}"
+      state: touch
+
 - name: Log output to a log file
   lineinfile:
     path: "{{ log_file }}"
     line: "Starting script..."
     state: present
 
+- name: Install EPEL repository
+  dnf:
+    name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+    state: present
+
+
+- name: Enable PHP 8.2 module
+  command: dnf module enable php:8.2 -y
+  register: php_enable
+
+- name: Install PHP-8.2 module
+  command: dnf module install php:8.2 -y
+  when: php_enable.rc == 0
+
+
+
 - name: Update package index and install required packages
-  apt:
+  yum:
     update_cache: yes
     name:
       - wget
@@ -14,14 +47,12 @@
       - zip
       - supervisor
       - composer
-      - apache2
+      - nginx
       - php
-      - libapache2-mod-php
       - php-cli
       - php-fpm
       - php-json
-      - php-common
-      - php-mysql
+      - php-mysqlnd
       - php-zip
       - php-gd
       - php-intl
@@ -29,23 +60,12 @@
       - php-curl
       - php-xml
       - php-pear
-      - php-tidy
       - php-soap
       - php-bcmath
-      - php-xmlrpc
+      - php-dba
+      - php-devel
+      - jq
     state: present
-
-- name: Write portal-supervisor.ini
-  template:
-    src: portal-supervisor.conf.j2
-    dest: "{{ supervisor_config_file }}"
-  notify: Restart Supervisor
-
-
-- name: Restart Supervisor
-  systemd:
-    name: supervisor
-    state: restarted
 
 - name: Clone Git repository
   git:
@@ -54,14 +74,56 @@
     version: dev
     force: yes
 
-- name: Install Composer dependencies
-  shell: |
-    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-    php composer-setup.php
-    php -r "unlink('composer-setup.php');"
-    mv composer.phar /usr/bin/composer
+
+- name: Change to the project directory and install Composer dependencies
+  ansible.builtin.shell: |
+    cd /var/www/html/shushportal
+    export COMPOSER_ALLOW_SUPERUSER=1
+    export COMPOSER_MEMORY_LIMIT=2G
+    echo "export COMPOSER_HOME=/usr/bin/composer" >> ~/.profile 
+    source ~/.profile 
+    /usr/bin/composer install --no-interaction
   args:
-    chdir: /var/www/html/shushportal
+    executable: /bin/bash 
+
+- name: Template PHP settings file
+  template:
+    src: settings.php.j2
+    dest: /var/www/html/shushportal/web/sites/default/settings.php  # Specify the destination path for the generated file
+  vars:
+    db_name: "moriaty"
+    db_user: "admin"
+    db_password: "pass"  # Password for the admin user
+
+
+- name: Ensure Nginx sites-enabled directory exists
+  file:
+    path: /etc/nginx/sites-enabled
+    state: directory
+    mode: '0755'
+
+- name: Write drupal-nginx. files
+  template:
+    src: drupal-nginx.conf
+    dest: "{{ drupal_nginx_conf }}"
+
+- name: Write nginx.conf files
+  template:
+    src: nginx.conf
+    dest: "{{ nginx_conf }}"
+
+
+- name: Start NGINX using systemctl with shell
+  ansible.builtin.shell: sudo systemctl restart nginx
+  become: yes  # Ensures the command runs with elevated privileges
+
+
+
+- name: Restart Supervisor
+  systemd:
+    name: supervisor
+    state: restarted
+
 
 - name: Configure Apache
   template:
@@ -80,16 +142,34 @@
     group: www-data
     mode: '775'
 
+
 - name: Run drush commands
   shell: |
-    /var/www/html/shushportal/vendor/bin/drush cr
-    /var/www/html/shushportal/vendor/bin/drush cim -y
-    /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
-    /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
-    /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
-    /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
-    /var/www/html/shushportal/vendor/bin/drush updb
-    /var/www/html/shushportal/vendor/bin/drush cr
+        echo "setting Home Directory"
+        export HOME=/var/www/html/shushportal
+        echo "drush configurations"
+        /var/www/html/shushportal/vendor/bin/drush cr
+        echo "config import"
+        /var/www/html/shushportal/vendor/bin/drush cim -y
+        echo "enabling custome modules and apigee module"
+        /var/www/html/shushportal/vendor/bin/drush en zcs_apis  -y
+        echo "Enabling Theme"
+        /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
+        echo "Installing Theme" 
+        /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
+        echo "Enabling Carrier User Module"
+        /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
+        echo "Enabling UClient User Module"
+        /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
+        echo "Enable Kong "
+        /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
+        echo "Enable Custome Module "
+        /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
+        echo "database update status"
+        /var/www/html/shushportal/vendor/bin/drush updb
+        echo "clearing drush"
+        /var/www/html/shushportal/vendor/bin/drush cr
+
 
 - name: Log completion message
   lineinfile:

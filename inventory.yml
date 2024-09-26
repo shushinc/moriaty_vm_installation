@@ -3,11 +3,12 @@ moriarty:
   children:
     dbs:
       hosts:
-        10.128.15.252:
+        34.41.106.135:
+          db_host: "10.128.0.89" 
     runtime:
       hosts:
-        10.128.15.251:
-        10.128.15.253:
+        34.134.30.155:
+        34.31.79.185:
 
   # Required Vars
   vars:
