@@ -5,7 +5,7 @@ $databases['default']['default'] = array (
   'username' => "{{ db_user }}",
   'password' => "{{ db_password }}",
   'prefix' => '',
-  'host' => "{{ internal-ip }}",
+  'host' => "{{ db_host }}",
   'port' => '3306',
   'driver' => 'mysql',
   'namespace' => 'Drupal\\mysql\\Driver\\Database\\mysql',
@@ -21,7 +21,7 @@ $settings['file_private_path'] = '/var/www/html/shushportal/private-files';
 $settings['update_free_access'] = FALSE;
 $settings['allow_authorize_operations'] = FALSE;
 // $settings['file_public_path'] = '/var/www/html/shushportal/web/sites/default/files';
-$settings['file_public_path'] = 'var/www/html/shushportal/web/sites/default/files';
+$settings['file_public_path'] = '/var/www/html/shushportal/web/sites/default/files';
 
 $salt_file = $settings['file_private_path'] ."/salt.txt";
 if(!file_exists($salt_file)) {

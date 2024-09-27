@@ -19,9 +19,27 @@ vim inventory.yml
 
 ansible_user: ansible
 ```
+4. update Inventory file 
+
+```bash
+vi inventory.yml
+```
+
+4. update db ip  
+
+```bash
+vi main.yml ( Line Number 102)
+```
+
 3. In the root directory, run the Ansible playbook to provision the cluster:
 
 ```bash
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags moriarty
 ```
+
+
+Verfication:
+Check devportal user is added to mysql  on the db server
+1.  mysql -u root
+2. SELECT user, host FROM mysql.user;

@@ -5,6 +5,9 @@
     state: latest
     update_cache: yes
 
+- name: Set SELinux to permissive mode
+  ansible.builtin.command: setenforce 0
+
 - name: Ensure log directory exists
   file:
     path: /var/log
@@ -21,6 +24,11 @@
     path: "{{ log_file }}"
     line: "Starting script..."
     state: present
+
+- name: Install the GPG key for EPEL repository
+  rpm_key:
+    state: present
+    key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
 
 - name: Install EPEL repository
   dnf:
@@ -63,17 +71,34 @@
       - php-soap
       - php-bcmath
       - php-dba
+      - php-dbg
       - php-devel
+      - php-common
+      - php-embedded
+      - php-enchant
+      - php-gmp
+      - php-ldap
+      - php-odbc
+      - php-pdo
+      - php-opcache
+      - php-process
+      - php-snmp
+      - patch
       - jq
     state: present
 
-- name: Clone Git repository
+- name: Check if the Git repository already exists
+  stat:
+    path: /var/www/html/shushportal
+  register: repo_check
+
+- name: Clone Git repository if it does not exist
   git:
     repo: "{{ git_repo }}"
     dest: "/var/www/html/shushportal"
-    version: dev
+    version: clearsky
     force: yes
-
+  when: not repo_check.stat.exists
 
 - name: Change to the project directory and install Composer dependencies
   ansible.builtin.shell: |
@@ -92,8 +117,9 @@
     dest: /var/www/html/shushportal/web/sites/default/settings.php  # Specify the destination path for the generated file
   vars:
     db_name: "moriaty"
-    db_user: "admin"
-    db_password: "pass"  # Password for the admin user
+    db_user: "devportal"
+    db_password: "pass"   # Password for the admin user
+    db_host: "10.128.0.93"
 
 
 - name: Ensure Nginx sites-enabled directory exists
@@ -101,6 +127,13 @@
     path: /etc/nginx/sites-enabled
     state: directory
     mode: '0755'
+
+- name: Ensure Script Dirctoruy
+  file:
+    path: /var/www/html/shushportal/scripts
+    state: directory
+    mode: '0755'
+
 
 - name: Write drupal-nginx. files
   template:
@@ -111,80 +144,134 @@
   template:
     src: nginx.conf
     dest: "{{ nginx_conf }}"
+    
+
+# - name: copy start-php-fpm files
+#   template:
+#     src: start-php-fpm.sh
+#     dest: "{{ start_php_fpm }}"
+#     mode: '0755'
 
 
-- name: Start NGINX using systemctl with shell
-  ansible.builtin.shell: sudo systemctl restart nginx
-  become: yes  # Ensures the command runs with elevated privileges
+# - name: copy supervisor.conf files
+#   template:
+#     src: supervisor.conf
+#     dest: "{{ drupal_supervisor }}"
+#     mode: '0755'
 
-
-
-- name: Restart Supervisor
-  systemd:
-    name: supervisor
-    state: restarted
-
-
-- name: Configure Apache
-  template:
-    src: shushportal.conf.j2
-    dest: "{{ apache_config_file }}"
-  notify:
-    - Enable site
-    - Restart Apache
-
-- name: Set permissions
+- name: Ensure the private directory exists
   file:
-    path: "/var/www/html/shushportal"
+    path: /var/www/html/shushportal/private-files
+    state: directory
+    mode: '0755'
+
+
+- name: copy salt files
+  template:
+    src: salt.txt
+    dest: "{{ salt_file }}"
+
+
+
+# - name: Start NGINX using systemctl with shell
+#   ansible.builtin.shell: sudo systemctl restart nginx
+#   become: yes  # Ensures the command runs with elevated privileges
+
+- name: Create devportal group
+  group:
+    name: devportal
+    state: present
+    system: yes
+
+- name: Create devportal user
+  user:
+    name: devportal
+    group: devportal
+    home: /home/devportal
+    shell: /bin/bash
+    create_home: yes
+    system: yes
+
+- name: Change ownership of /var/www/html
+  file:
+    path: /var/www/html
+    owner: devportal
+    group: nginx
     state: directory
     recurse: yes
-    owner: www-data
-    group: www-data
-    mode: '775'
 
+- name: copy permission files
+  template:
+    src: set-permissions.sh
+    dest: "{{ set_permission_file }}"
+
+- name: Ensure set-permissions.sh is executable
+  file:
+    path: /var/www/html/shushportal/set-permissions.sh
+    mode: '0755'  # Ensure it's executable
+
+- name: Set permissions for settings.php
+  ansible.builtin.file:
+    path: /var/www/html/shushportal/web/sites/default/settings.php
+    mode: '0664'
+    owner: devportal  # Set this to the appropriate user
+    group: nginx      # Set this to the appropriate group
+
+- name: Set permissions for the default directory
+  ansible.builtin.file:
+    path: /var/www/html/shushportal/web/sites/default
+    mode: '0775'
+    recurse: yes
+    owner: devportal  # Set this to the appropriate user
+    group: nginx      # Set this to the appropriate group
+# - name: Run set-permissions.sh script
+#   command: /var/www/html/shushportal/set-permissions.sh --drupal_path=/var/www/html/shushportal/web --drupal_user=devportal --httpd_group=nginx
 
 - name: Run drush commands
   shell: |
-        echo "setting Home Directory"
-        export HOME=/var/www/html/shushportal
-        echo "drush configurations"
         /var/www/html/shushportal/vendor/bin/drush cr
-        echo "config import"
         /var/www/html/shushportal/vendor/bin/drush cim -y
-        echo "enabling custome modules and apigee module"
-        /var/www/html/shushportal/vendor/bin/drush en zcs_apis  -y
-        echo "Enabling Theme"
+        /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
         /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
-        echo "Installing Theme" 
         /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
-        echo "Enabling Carrier User Module"
         /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
-        echo "Enabling UClient User Module"
         /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
-        echo "Enable Kong "
         /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
-        echo "Enable Custome Module "
         /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
-        echo "database update status"
         /var/www/html/shushportal/vendor/bin/drush updb
-        echo "clearing drush"
         /var/www/html/shushportal/vendor/bin/drush cr
+  args:
+    executable: /bin/bash
 
+- name: Change PHP-FPM user and group to nginx
+  command: sed -i -e 's/^user = apache/user = nginx/' -e 's/^group = apache/group = nginx/' /etc/php-fpm.d/www.conf
+
+- name: Restart PHP-FPM service
+  systemd:
+    name: php-fpm
+    state: restarted
+
+- name: Reload Nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
+# - name: Run Supervisor with Drupal configuration
+#   command: supervisord --nodaemon -c /etc/drupal_supervisor.conf
+  # async: 0  # Runs immediately
+  # poll: 0   # Do not wait for the command to complete
+  # register: supervisord_status
+
+# - name: Wait for Supervisor to start
+#   async_status:
+#     jid: "{{ supervisord_status.ansible_job_id }}"
+#   register: job_result
+#   until: job_result.finished
+#   retries: 10
+#   delay: 5
 
 - name: Log completion message
   lineinfile:
     path: "{{ log_file }}"
     line: "Startup script completed successfully."
     state: present
-
-# Handlers
-# - name: Enable site
-#   #apache2_site:
-#   community.apache.apache2_site:
-#     name: shushportal.conf
-#     state: enabled
-
-- name: Restart Apache
-  systemd:
-    name: apache2
-    state: restarted

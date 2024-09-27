@@ -12,3 +12,9 @@ db_user: "devportal"
 db_password: "pass"  # Password for the admin user
 root_password: "pass"  # MySQL root password
 sql_file_path: "/tmp/zcs_new.sql"  # Path to the SQL file
+salt_file: "/var/www/html/shushportal/private-files/salt.txt"
+set_permission_file: "/var/www/html/shushportal/set-permissions.sh"
+start_php_fpm: "/var/www/html/shushportal/scripts/start-php-fpm.sh"
+drupal_supervisor: "/etc/drupal_supervisor.conf"
+
+
