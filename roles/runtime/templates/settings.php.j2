@@ -21,7 +21,11 @@ $settings['file_private_path'] = '/var/www/html/shushportal/private-files';
 $settings['update_free_access'] = FALSE;
 $settings['allow_authorize_operations'] = FALSE;
 // $settings['file_public_path'] = '/var/www/html/shushportal/web/sites/default/files';
-$settings['file_public_path'] = '/var/www/html/shushportal/web/sites/default/files';
+$settings['file_public_path'] = 'var/www/html/shushportal/web/sites/default/files';
+$settings['file_temp_path'] = '/tmp';
+
+#$settings['reverse_proxy'] = TRUE;
+#$settings['reverse_proxy_addresses'] = ['127.0.0.1', '0.0.0.0'];
 
 $salt_file = $settings['file_private_path'] ."/salt.txt";
 if(!file_exists($salt_file)) {

@@ -78,13 +78,13 @@
     priv: "{{ db_name }}.*:ALL"
     state: present
 
-# - name: Create admin MySQL user with access to the database
-#   mysql_user:
-#     login_user: root
-#     name: "{{ db_admin_user }}"
-#     password: "{{ db_admin_password }}"
-#     priv: "{{ db_admin_name }}.*:ALL"
-#     state: present
+- name: Create admin MySQL user with access to the database
+  mysql_user:
+    login_user: root
+    name: "{{ db_admin_user }}"
+    password: "{{ db_admin_password }}"
+    priv: "{{ db_name }}.*:ALL"
+    state: present
     
 - name: Grant all privileges to 'devportal' from any host
   mysql_user:
@@ -97,16 +97,16 @@
     db_user: devportal
     db_password: pass
 
-# - name: Grant all privileges to 'admin' from any host
-#   mysql_user:
-#     name: "{{ db_admin_user }}"
-#     host: "%"
-#     password: "{{ db_admin_password }}"
-#     priv: "*.*:ALL"
-#     state: present
-#   vars:
-#     db_admin_user: admin
-#     db_admin_password: pass
+- name: Grant all privileges to 'admin' from any host
+  mysql_user:
+    name: "{{ db_admin_user }}"
+    host: "%"
+    password: "{{ db_admin_password }}"
+    priv: "*.*:ALL"
+    state: present
+  vars:
+    db_admin_user: admin
+    db_admin_password: pass
 
 
 - name: Import SQL file into MySQL database

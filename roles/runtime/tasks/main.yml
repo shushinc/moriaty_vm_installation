@@ -117,7 +117,7 @@
     dest: /var/www/html/shushportal/web/sites/default/settings.php  # Specify the destination path for the generated file
   vars:
     db_name: "moriaty"
-    db_user: "devportal"
+    db_user: "admin"
     db_password: "pass"   # Password for the admin user
     db_host: "10.128.0.93"
 
@@ -210,6 +210,13 @@
     path: /var/www/html/shushportal/set-permissions.sh
     mode: '0755'  # Ensure it's executable
 
+- name: Change ownership of /var/www/html
+  ansible.builtin.file:
+    path: /var/www/html
+    owner: devportal
+    group: nginx
+    recurse: yes
+
 - name: Set permissions for settings.php
   ansible.builtin.file:
     path: /var/www/html/shushportal/web/sites/default/settings.php
@@ -224,6 +231,7 @@
     recurse: yes
     owner: devportal  # Set this to the appropriate user
     group: nginx      # Set this to the appropriate group
+
 # - name: Run set-permissions.sh script
 #   command: /var/www/html/shushportal/set-permissions.sh --drupal_path=/var/www/html/shushportal/web --drupal_user=devportal --httpd_group=nginx
 
