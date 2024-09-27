@@ -11,8 +11,10 @@ Root access (or a user with equivalent permissions)
 
 1. Start by cloning the repository:
 ```bash
-git clone https://github.com/shushinc/moriaty_vm_installation.git
 
+sudo su - ansible 
+git clone https://github.com/shushinc/moriaty_vm_installation.git
+cd moriaty_vm_installation
 git checkout ansible-code
 ```
 2. Edit the inventory file to add the `ansible_user` you created during the prerequisites:
@@ -24,13 +26,13 @@ ansible_user: ansible
 4. update Inventory file 
 
 ```bash
-vi inventory.yml
+vi inventory.yml - update ips for dbs and runtime
 ```
 
 4. update db ip  
 
 ```bash
-vi main.yml ( Line Number 102)
+vi roles/runtime/tasks/main.yml ( Line Number 122)
 ```
 
 3. In the root directory, run the Ansible playbook to provision the cluster:
@@ -45,3 +47,4 @@ Verfication:
 Check devportal user is added to mysql  on the db server
 1.  mysql -u root
 2. SELECT user, host FROM mysql.user;
+3. SHOW DATABASES;
