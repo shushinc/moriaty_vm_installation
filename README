@@ -12,6 +12,8 @@ Root access (or a user with equivalent permissions)
 1. Start by cloning the repository:
 ```bash
 git clone https://github.com/shushinc/moriaty_vm_installation.git
+
+git checkout ansible-code
 ```
 2. Edit the inventory file to add the `ansible_user` you created during the prerequisites:
 ```bash
