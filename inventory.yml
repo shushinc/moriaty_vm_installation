@@ -14,3 +14,4 @@ moriarty:
   vars:
     ansible_port: 22
     ansible_user: ansible
+    drush_target_host: 10.172.80.159 

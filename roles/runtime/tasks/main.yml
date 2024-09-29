@@ -254,90 +254,112 @@
 - name: Clear cache
   command: /var/www/html/shushportal/vendor/bin/drush cr
   register: drush_cr_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for cache clear
   debug:
     var: drush_cr_output.stdout_lines
-
+  when: inventory_hostname == drush_target_host 
+  
 - name: Import configuration
   command: /var/www/html/shushportal/vendor/bin/drush cim -y
   register: drush_cim_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for config import
   debug:
       var: drush_cim_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Enable zcs_apis module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
   register: drush_en_zcs_apis_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for enabling zcs_apis
   debug:
     var: drush_en_zcs_apis_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Enable shush theme
   command: /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
   register: drush_theme_en_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for enabling theme
   debug:
     var: drush_theme_en_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Set default theme
   command: /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
   register: drush_config_set_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for setting default theme
   debug:
     var: drush_config_set_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Enable zcs_user_management module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
   register: drush_en_zcs_user_management_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for enabling zcs_user_management
   debug:
     var: drush_en_zcs_user_management_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Enable zcs_client_management module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
   register: drush_en_zcs_client_management_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for enabling zcs_client_management
   debug:
     var: drush_en_zcs_client_management_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Enable zcs_kong module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
   register: drush_en_zcs_kong_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for enabling zcs_kong
   debug:
     var: drush_en_zcs_kong_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Enable zcs_custom module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
   register: drush_en_zcs_custom_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for enabling zcs_custom
   debug:
     var: drush_en_zcs_custom_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Run database updates
   command: /var/www/html/shushportal/vendor/bin/drush updb
   register: drush_updb_output
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for database updates
   debug:
     var: drush_updb_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Clear cache again
   command: /var/www/html/shushportal/vendor/bin/drush cr
   register: drush_cr_output_final
+  when: inventory_hostname == drush_target_host 
 
 - name: Show output for final cache clear
   debug:
     var: drush_cr_output_final.stdout_lines
+  when: inventory_hostname == drush_target_host 
 
 - name: Change PHP-FPM user and group to nginx
   command: sed -i -e 's/^user = apache/user = nginx/' -e 's/^group = apache/group = nginx/' /etc/php-fpm.d/www.conf
