@@ -226,7 +226,7 @@
 
 - name: Set permissions for the default directory
   ansible.builtin.file:
-    path: /var/www/html/shushportal/web/sites/default
+    path: /var/www/html/shushportal/web
     mode: '0775'
     recurse: yes
     owner: devportal  # Set this to the appropriate user
