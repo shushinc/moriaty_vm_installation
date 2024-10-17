@@ -1,7 +1,7 @@
 ---
 # Default variables for startup_setup role
 log_file: "/var/log/startup-script.log"
-git_repo: "https://github.com/shushinc/shushportal.git"
+git_repo: "https://gitlab.com/devops193526/shushportal-v.2.0.git"
 apache_config_file: "/etc/apache2/sites-available/shushportal.conf"
 supervisor_config_file: "/etc/supervisor/conf.d/portal-supervisor.conf"
 composer_version: "2.1.8"
