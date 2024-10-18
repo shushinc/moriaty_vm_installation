@@ -3,15 +3,14 @@ moriarty:
   children:
     dbs:
       hosts:
-        10.172.80.158:
-          db_host: "10.172.80.158" 
+        10.128.0.8:
+          db_host: "10.128.0.8" 
     runtime:
       hosts:
-        10.172.80.159:
-        10.172.80.160:
+        10.128.0.7:
 
   # Required Vars
   vars:
     ansible_port: 22
     ansible_user: ansible
-    drush_target_host: 10.172.80.159 
+    drush_target_host: 10.128.0.7
