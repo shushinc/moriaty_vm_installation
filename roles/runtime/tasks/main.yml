@@ -119,7 +119,7 @@
     db_name: "moriaty"
     db_user: "admin"
     db_password: "pass"   # Password for the admin user
-    db_host: "10.172.80.158"
+    db_host: "10.51.3.12"
 
 
 - name: Ensure Nginx sites-enabled directory exists
