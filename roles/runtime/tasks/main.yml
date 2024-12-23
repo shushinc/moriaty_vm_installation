@@ -96,7 +96,7 @@
   git:
     repo: "{{ git_repo }}"
     dest: "/var/www/html/shushportal"
-    version: clearsky
+    version: release-2.0
     force: yes
   when: not repo_check.stat.exists
 
