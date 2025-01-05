@@ -13,9 +13,9 @@
     - role: runtime
       tags: moriarty
 
-- name: upgrade
-  hosts: runtime,mysql
+- name: upgrade-db
+  hosts: dbs
   become: true
   roles:
-    - role: upgrade
-      tags: upgrade
+    - role: upgrade-db
+      tags: mysql
