@@ -12,3 +12,10 @@
   roles:
     - role: runtime
       tags: moriarty
+
+- name: upgrade
+  hosts: runtime,mysql
+  become: true
+  roles:
+    - role: upgrade
+      tags: upgrade
