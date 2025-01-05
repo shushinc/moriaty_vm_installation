@@ -17,5 +17,5 @@
   hosts: dbs
   become: true
   roles:
-    - role: upgrade-db
-      tags: mysql
+    - role: dbs
+      tags: upgrade-db

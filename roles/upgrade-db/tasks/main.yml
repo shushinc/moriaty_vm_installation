@@ -5,9 +5,30 @@
     name: "{{ db_name_v1 }}"
     state: present
 
+- name: Create MySQL user with access to the database
+  mysql_user:
+    login_user: root
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    priv: "{{ db_name_v1 }}.*:ALL"
+    state: present
+
+- name: Create admin MySQL user with access to the database
+  mysql_user:
+    login_user: root
+    name: "{{ db_admin_user }}"
+    password: "{{ db_admin_password }}"
+    priv: "{{ db_name_v1 }}.*:ALL"
+    state: present
+    
+
 - name: Copy tables from old database to new database
   shell: |
     mysqldump -u '{{ db_user }}' -p'{{ db_password }}' '{{ db_name }}' | mysql -u '{{ db_user }}' -p'{{ db_password }}' '{{ db_name_v1 }}'
+
+    mysqldump -u root '{{ db_name }}' | mysql -u root '{{ db_name_v1 }}'
+ mysqldump -u root  'moriaty' | mysql -u root  'moriaty_v1'
+
 
 - name: Drop old database
   mysql_db:
