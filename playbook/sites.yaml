@@ -17,5 +17,5 @@
   hosts: dbs
   become: true
   roles:
-    - role: dbs
+    - role: upgrade-db
       tags: upgrade-db
