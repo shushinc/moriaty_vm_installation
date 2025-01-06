@@ -92,6 +92,10 @@
     path: /var/www/html/shushportal
   register: repo_check
 
+- name: Mark the repository as safe for Git
+  command: git config --global --add safe.directory /var/www/html/shushportal
+
+
 - name: Clone Git repository if it does not exist
   git:
     repo: "{{ git_repo }}"
@@ -99,6 +103,14 @@
     version: release-2.0
     force: yes
   when: not repo_check.stat.exists
+
+- name: Ensure the correct branch is checked out and up-to-date
+  git:
+    repo: "{{ git_repo }}"
+    dest: "/var/www/html/shushportal"
+    version: release-2.0
+    force: yes
+    update: yes
 
 - name: Change to the project directory and install Composer dependencies
   ansible.builtin.shell: |
