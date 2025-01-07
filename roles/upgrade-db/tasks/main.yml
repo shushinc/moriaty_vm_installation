@@ -1,4 +1,10 @@
 ---
+- name: Copy SQL file template to destination server
+  template:
+    src: zcs_new.sql 
+    dest: "{{ sql_file_path }}"
+    mode: '0644'
+    
 - name: Create MySQL database
   mysql_db:
     login_user: root
