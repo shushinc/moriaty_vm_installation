@@ -386,6 +386,19 @@
     name: nginx
     state: reloaded
 
+- name: Ensure required SELinux packages are installed
+  package:
+    name: policycoreutils-python-utils
+    state: present
+  when: ansible_os_family == "RedHat"
+
+
+- name: Allow PHP-FPM (Nginx) to connect to a remote database
+  seboolean:
+    name: httpd_can_network_connect_db
+    state: yes
+    persistent: yes
+
 - name: Ensure Nginx and PHP-FPM start on boot
   systemd:
     name: "{{ item }}"
