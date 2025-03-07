@@ -386,6 +386,15 @@
     name: nginx
     state: reloaded
 
+- name: Ensure Nginx and PHP-FPM start on boot
+  systemd:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  loop:
+    - nginx
+    - php-fpm
+
 # - name: Run Supervisor with Drupal configuration
 #   command: supervisord --nodaemon -c /etc/drupal_supervisor.conf
   # async: 0  # Runs immediately
