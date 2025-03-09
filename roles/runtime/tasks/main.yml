@@ -397,6 +397,16 @@
     var: drush_disable_kong_output.stdout_lines
   when: apigateway == "aws" and inventory_hostname == drush_target_host
 
+- name: disabling zcs_api_attributes module
+  command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_api_attributes -y
+  register: drush_en_zcs_api_attributes_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for disabling zcs_api_attributess
+  debug:
+    var: drush_en_zcs_api_attributes_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
 - name: Enable zcs_custom module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
   register: drush_en_zcs_custom_output
