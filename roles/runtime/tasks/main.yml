@@ -343,6 +343,60 @@
     var: drush_en_zcs_kong_output.stdout_lines
   when: inventory_hostname == drush_target_host 
 
+- name: Enable the selected API Gateway module and disable the other
+  block:
+    - name: Enable Kong module if apigateway is set to kong
+      command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
+      register: drush_enable_kong_output
+      when: apigateway == "kong"
+
+    - name: Enable AWS API Gateway module if apigateway is set to aws
+      command: /var/www/html/shushportal/vendor/bin/drush en zcs_aws -y
+      register: drush_enable_aws_output
+      when: apigateway == "aws"
+
+    - name: Enable zcs_aws after enabling zcs_kong (if apigateway is kong)
+      command: /var/www/html/shushportal/vendor/bin/drush en zcs_aws -y
+      register: drush_enable_aws_after_kong_output
+      when: apigateway == "kong"
+
+    - name: Enable zcs_kong after enabling zcs_aws (if apigateway is aws)
+      command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
+      register: drush_enable_kong_after_aws_output
+      when: apigateway == "aws"
+
+    - name: Disable zcs_aws if apigateway is kong
+      command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_aws -y
+      register: drush_disable_aws_output
+      when: apigateway == "kong"
+
+    - name: Disable zcs_kong if apigateway is aws
+      command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_kong -y
+      register: drush_disable_kong_output
+      when: apigateway == "aws"
+
+  when: inventory_hostname == drush_target_host
+
+- name: Show output for enabling Kong
+  debug:
+    var: drush_enable_kong_output.stdout_lines
+  when: apigateway == "kong" and inventory_hostname == drush_target_host
+
+- name: Show output for enabling AWS API Gateway
+  debug:
+    var: drush_enable_aws_output.stdout_lines
+  when: apigateway == "aws" and inventory_hostname == drush_target_host
+
+- name: Show output for disabling AWS API Gateway
+  debug:
+    var: drush_disable_aws_output.stdout_lines
+  when: apigateway == "kong" and inventory_hostname == drush_target_host
+
+- name: Show output for disabling Kong
+  debug:
+    var: drush_disable_kong_output.stdout_lines
+  when: apigateway == "aws" and inventory_hostname == drush_target_host
+
 - name: Enable zcs_custom module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
   register: drush_en_zcs_custom_output
