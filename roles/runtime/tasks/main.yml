@@ -491,3 +491,51 @@
     path: "{{ log_file }}"
     line: "Startup script completed successfully."
     state: present
+
+- name: Ensure Git directory is marked safe
+  shell: git config --global --add safe.directory /var/www/html/shushportal
+  args:
+    chdir: /var/www/html/shushportal
+
+- name: Get latest Git tag
+  shell: git describe --tags --abbrev=0 || echo "v0.0.0"
+  args:
+    chdir: /var/www/html/shushportal
+  register: version_tag
+
+- name: Get Git commit SHA
+  shell: git rev-parse HEAD
+  args:
+    chdir: /var/www/html/shushportal
+  register: commit_sha
+
+- name: Get Git branch name
+  shell: git rev-parse --abbrev-ref HEAD
+  args:
+    chdir: /var/www/html/shushportal
+  register: branch_name
+
+- name: Get Drupal version via Drush
+  shell: /var/www/html/shushportal/vendor/bin/drush status | grep 'Drupal version' | awk -F ':' '{gsub(/^[ \t]+/, "", $2); print $2}'
+  register: drupal_version
+
+- name: Get build date (UTC)
+  shell: date -u +'%Y-%m-%dT%H:%M:%SZ'
+  register: build_date
+
+- name: Create version.json
+  copy:
+    dest: /var/www/html/shushportal/web/version.json
+    content: |
+      {
+        "version": "{{ version_tag.stdout }}",
+        "commit": "{{ commit_sha.stdout }}",
+        "branch": "{{ branch_name.stdout }}",
+        "build_date": "{{ build_date.stdout }}",
+        "environment": "{{ environment | default('unknown') }}",
+        "drupal_version": "{{ drupal_version.stdout }}"
+      }
+
+- name: Echo version path
+  debug:
+    msg: "version.json created at /var/www/html/shushportal/web/version"
