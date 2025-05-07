@@ -19,3 +19,17 @@
   roles:
     - role: upgrade-db
       tags: upgrade-db
+
+- name: Metabase DB tasks
+  hosts: dbs
+  become: true
+  roles:
+    - role: metabase_db
+      tags: metabase
+
+- name: Metabase Runtime tasks
+  hosts: runtime
+  become: true
+  roles:
+    - role: metabase_runtime
+      tags: metabase

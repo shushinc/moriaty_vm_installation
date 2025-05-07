@@ -1,0 +1,116 @@
+---
+- name: Update the package index on RHEL
+  dnf:
+    name: "*"
+    state: latest
+    update_cache: yes
+
+- name: Set SELinux to permissive mode
+  ansible.builtin.command: setenforce 0
+
+- name: Ensure log directory exists
+  file:
+    path: /var/log
+    state: directory
+    mode: '0755'
+
+- name: Create Log File
+  file:
+      path: "{{ log_file }}"
+      state: touch
+
+- name: Log output to a log file
+  lineinfile:
+    path: "{{ log_file }}"
+    line: "Starting script..."
+    state: present
+
+- name: Install the GPG key for EPEL repository
+  rpm_key:
+    state: present
+    key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+
+- name: Install EPEL repository
+  dnf:
+    name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+    state: present
+
+- name: Install and configure Metabase
+  hosts: metabase
+  become: yes
+  tasks:
+    - name: Install Java 17
+      dnf:
+        name: java-17-openjdk
+        state: present
+
+    - name: Create Metabase directory
+      file:
+        path: /opt/metabase
+        state: directory
+        mode: '0755'
+
+    - name: Download Metabase jar
+      get_url:
+        url: "https://downloads.metabase.com/{{ metabase_version }}/metabase.jar"
+        dest: /opt/metabase/metabase.jar
+        mode: '0755'
+
+    - name: Create Metabase systemd service
+      copy:
+        dest: /etc/systemd/system/metabase.service
+        content: |
+          [Unit]
+          Description=Metabase
+          After=network.target
+
+          [Service]
+          WorkingDirectory=/opt/metabase
+          ExecStart=/usr/bin/java -jar /opt/metabase/metabase.jar
+          Environment=MB_DB_TYPE=mysql
+          Environment=MB_DB_DBNAME={{ mysql_db }}
+          Environment=MB_DB_PORT=3306
+          Environment=MB_DB_USER={{ mysql_user }}
+          Environment=MB_DB_PASS={{ mysql_password }}
+          Environment=MB_DB_HOST={{ mysql_host }}
+          Environment=MB_JETTY_PORT=3001
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and start Metabase
+      systemd:
+        daemon_reload: yes
+        name: metabase
+        state: started
+        enabled: yes
+
+    # - name: Wait for Metabase to be available
+    #   uri:
+    #     url: http://localhost:3001/api/health
+    #     method: GET
+    #     status_code: 200
+    #   register: result
+    #   until: result.status == 200 or (result.json.status == "ok")
+    #   retries: 30
+    #   delay: 5
+
+    # - name: Run Metabase initial setup
+    #   uri:
+    #     url: http://localhost:3001/api/setup
+    #     method: POST
+    #     body_format: json
+    #     body:
+    #       user:
+    #         first_name: Admin
+    #         last_name: User
+    #         email: "{{ metabase_admin_email }}"
+    #         password: "{{ metabase_admin_password }}"
+    #         site_name: Shush Dev Portal
+    #       prefs:
+    #         allow_tracking: false
+    #     status_code: 200
+    #   register: setup_response
+    #   when: setup_response is not defined
