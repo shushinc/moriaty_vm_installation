@@ -24,12 +24,12 @@
   hosts: dbs
   become: true
   roles:
-    - role: metabase_db
+    - role: metabase
       tags: metabase
 
 - name: Metabase Runtime tasks
   hosts: runtime
   become: true
   roles:
-    - role: metabase_runtime
+    - role: metabase
       tags: metabase

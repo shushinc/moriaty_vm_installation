@@ -1,0 +1,115 @@
+---
+- name: Update the package index on RHEL
+  dnf:
+    name: "*"
+    state: latest
+    update_cache: yes
+
+- name: Install Java for Metabase on RHEL-based systems
+  dnf:
+    name: java-11-openjdk
+    state: present
+
+- name: Create metabase group
+  group:
+    name: metabase
+    system: yes
+
+- name: Create metabase user
+  user:
+    name: metabase
+    group: metabase
+    system: yes
+    shell: /bin/false
+
+- name: Create Metabase directory
+  file:
+    path: /var/www/html/shushportal//metabase
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Ensure ownership of Metabase directory
+  file:
+    path: /var/www/html/shushportal/metabase
+    state: directory
+    owner: metabase
+    group: metabase
+    recurse: yes
+    
+- name: Download Metabase JAR
+  get_url:
+    url: https://downloads.metabase.com/v0.48.7/metabase.jar
+    dest: /var/www/html/shushportal/metabase.jar
+    mode: '0755'
+
+- name: Create Metabase log file
+  file:
+    path: /var/log/metabase.log
+    state: touch
+    owner: metabase
+    group: metabase
+    mode: '0644'
+
+- name: Create Metabase systemd service file
+  copy:
+    dest: /etc/systemd/system/metabase.service
+    content: |
+      [Unit]
+      Description=Metabase server
+      After=network.target
+
+      [Service]
+      WorkingDirectory=/var/www/html/shushportal/metabase
+      ExecStart=/usr/bin/java --add-opens java.base/java.nio=ALL-UNNAMED -jar /var/www/html/shushportal/metabase/metabase.jar
+      EnvironmentFile=/etc/default/metabase
+      User=metabase
+      Type=simple
+      StandardOutput=syslog
+      StandardError=syslog
+      SyslogIdentifier=metabase
+      SuccessExitStatus=143
+      TimeoutStopSec=120
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    
+  #notify: Restart Metabase
+- name: Initialize metabase_env_vars
+  set_fact:
+    metabase_env_vars: {}
+
+- name: Collect MB_ variables into metabase_env_vars
+  set_fact:
+    metabase_env_vars: "{{ metabase_env_vars | combine({ item: lookup('vars', item) }) }}"
+  loop: "{{ vars.keys() | select('match', '^MB_') | list }}"
+
+
+- name: Create Metabase environment file
+  copy:
+    dest: /etc/default/metabase
+    content: |
+      {% for key, value in metabase_env_vars.items() %}
+      {{ key }}={{ value }}
+      {% endfor %}
+    owner: metabase
+    group: metabase
+    mode: '0644'
+
+
+- name: Create rsyslog config for Metabase
+  copy:
+    dest: /etc/rsyslog.d/metabase.conf
+    content: |
+      if $programname == 'metabase' then /var/log/metabase.log
+      & stop
+  notify: Restart rsyslog
+
+
+- name: Start and enable Metabase service
+  systemd:
+    name: metabase
+    state: started
+    enabled: yes
