@@ -1,0 +1,55 @@
+---
+- name: Ensure MySQL service is started and enabled
+  service:
+    name: mysqld
+    state: started
+    enabled: yes
+
+- name: Create Metabase database
+  mysql_db:
+    name: "{{ db_name }}"
+    state: present
+    login_user: root
+
+- name: Create Metabase user for localhost
+  mysql_user:
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    host: "localhost"
+    priv: "{{ db_name }}.*:ALL"
+    state: present
+    login_user: root
+
+- name: Create Metabase user for any host (%)
+  mysql_user:
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    host: "%"
+    priv: "{{ db_name }}.*:ALL"
+    state: present
+    login_user: root
+
+- name: Alter user to use mysql_native_password (localhost)
+  mysql_user:
+    name: "{{ db_user }}"
+    host: "localhost"
+    password: "{{ db_password }}"
+    login_user: root
+    plugin: mysql_native_password
+    state: present
+    update_password: always
+
+- name: Alter user to use mysql_native_password (%)
+  mysql_user:
+    name: "{{ db_user }}"
+    host: "%"
+    password: "{{ db_password }}"
+    login_user: root
+    plugin: mysql_native_password
+    state: present
+    update_password: always
+
+- name: Flush privileges
+  shell: "mysql -u root -e 'FLUSH PRIVILEGES;'"
+  args:
+    executable: /bin/bash
