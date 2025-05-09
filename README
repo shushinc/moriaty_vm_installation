@@ -40,7 +40,7 @@ vi roles/runtime/tasks/main.yml ( Line Number 122)
 ```bash
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags moriarty
-
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags metabase
 
 ```
 
