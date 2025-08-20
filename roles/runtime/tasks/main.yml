@@ -100,7 +100,7 @@
   git:
     repo: "{{ git_repo }}"
     dest: "/var/www/html/shushportal"
-    version: aws
+    version: v-1.3-mobileworldcongress
     force: yes
   when: not repo_check.stat.exists
 
@@ -407,7 +407,7 @@
       {{ item.item }} -> rc={{ item.rc }}, changed={{ item.changed }},
       stdout_lines={{ item.stdout_lines | default([]) }}
   loop: "{{ drush_gw_disable.results | default([]) }}"
-  
+
 # ---- Enable api_attributes module ----
 - name: disabling zcs_api_attributes module
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_api_attributes -y
