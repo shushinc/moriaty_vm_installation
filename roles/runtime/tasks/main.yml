@@ -123,15 +123,23 @@
   args:
     executable: /bin/bash 
 
+- name: Resolve DB host from dbs group
+  set_fact:
+    db_host_resolved: >-
+      {{
+        (groups['dbs'] | map('extract', hostvars, 'db_host') | select('defined') | list | first)
+          | default(groups['dbs'] | map('extract', hostvars, 'ansible_host') | list | first)
+      }}
+
 - name: Template PHP settings file
   template:
     src: settings.php.j2
     dest: /var/www/html/shushportal/web/sites/default/settings.php  # Specify the destination path for the generated file
   vars:
-    db_name: "moriaty"
-    db_user: "admin"
-    db_password: "pass"   # Password for the admin user
-    db_host: "10.172.80.158"
+    db_host: "{{ db_host_resolved }}"
+    db_name: "{{ db_name }}"
+    db_user: "{{ db_user }}"
+    db_password: "{{ db_password }}"
 
 
 - name: Ensure Nginx sites-enabled directory exists
@@ -333,72 +341,76 @@
     var: drush_en_zcs_client_management_output.stdout_lines
   when: inventory_hostname == drush_target_host 
 
-- name: Enable zcs_kong module
-  command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
-  register: drush_en_zcs_kong_output
-  when: inventory_hostname == drush_target_host 
 
-- name: Show output for enabling zcs_kong
+# ---- API Gateway module selection (kong/aws/none) ----
+- name: Validate apigateway value
+  when: is_drush_target
+  assert:
+    that:
+      - apigateway in ['kong', 'aws', 'none']
+    fail_msg: "apigateway must be one of: kong, aws, none (got: {{ apigateway }})"
+  register: apigw_validation
+
+- name: Show apigateway value (validation passed)
+  when: is_drush_target
   debug:
-    var: drush_en_zcs_kong_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
+    msg: "apigateway is set to: {{ apigateway }} (validation OK)"
 
-- name: Enable the selected API Gateway module and disable the other
-  block:
-    - name: Enable Kong module if apigateway is set to kong
-      command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
-      register: drush_enable_kong_output
-      when: apigateway == "kong"
+- name: Compute gateway enable/disable sets
+  when: is_drush_target
+  set_fact:
+    gw_enable: "{{ ['zcs_kong'] if apigateway == 'kong' else (['zcs_aws'] if apigateway == 'aws' else []) }}"
+    gw_disable: "{{ ['zcs_aws'] if apigateway == 'kong' else (['zcs_kong'] if apigateway == 'aws' else ['zcs_kong','zcs_aws']) }}"
+  register: gw_sets
 
-    - name: Enable AWS API Gateway module if apigateway is set to aws
-      command: /var/www/html/shushportal/vendor/bin/drush en zcs_aws -y
-      register: drush_enable_aws_output
-      when: apigateway == "aws"
-
-    - name: Enable zcs_aws after enabling zcs_kong (if apigateway is kong)
-      command: /var/www/html/shushportal/vendor/bin/drush en zcs_aws -y
-      register: drush_enable_aws_after_kong_output
-      when: apigateway == "kong"
-
-    - name: Enable zcs_kong after enabling zcs_aws (if apigateway is aws)
-      command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
-      register: drush_enable_kong_after_aws_output
-      when: apigateway == "aws"
-
-    - name: Disable zcs_aws if apigateway is kong
-      command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_aws -y
-      register: drush_disable_aws_output
-      when: apigateway == "kong"
-
-    - name: Disable zcs_kong if apigateway is aws
-      command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_kong -y
-      register: drush_disable_kong_output
-      when: apigateway == "aws"
-
-  when: inventory_hostname == drush_target_host
-
-- name: Show output for enabling Kong
+- name: Show computed gateway sets
+  when: is_drush_target
   debug:
-    var: drush_enable_kong_output.stdout_lines
-  when: apigateway == "kong" and inventory_hostname == drush_target_host
+    msg:
+      - "Modules to ENABLE: {{ gw_enable | join(', ') if gw_enable | length > 0 else 'none' }}"
+      - "Modules to DISABLE: {{ gw_disable | join(', ') if gw_disable | length > 0 else 'none' }}"
 
-- name: Show output for enabling AWS API Gateway
+- name: Enable desired gateway module(s)
+  when: is_drush_target and gw_enable | length > 0
+  command: /var/www/html/shushportal/vendor/bin/drush en {{ item }} -y
+  args:
+    chdir: /var/www/html/shushportal
+  loop: "{{ gw_enable }}"
+  register: drush_gw_enable
+  changed_when: "'installed' in (drush_gw_enable.stdout | default('')) or (drush_gw_enable.results | map(attribute='stdout') | join(' ') | lower).find('installed') != -1"
+  failed_when: false
+
+- name: Output for enabling desired gateway module(s)
+  when: is_drush_target and gw_enable | length > 0
   debug:
-    var: drush_enable_aws_output.stdout_lines
-  when: apigateway == "aws" and inventory_hostname == drush_target_host
+     msg: >
+      {{ item.item }} -> rc={{ item.rc }}, changed={{ item.changed }},
+      stdout_lines={{ item.stdout_lines | default([]) }}
+  loop: "{{ drush_gw_enable.results | default([]) }}"
 
-- name: Show output for disabling AWS API Gateway
+- name: Disable undesired gateway module(s)
+  when: is_drush_target and gw_disable | length > 0
+  command: /var/www/html/shushportal/vendor/bin/drush pmu {{ item }} -y
+  args:
+    chdir: /var/www/html/shushportal
+  loop: "{{ gw_disable }}"
+  register: drush_gw_disable
+  failed_when: false
+  changed_when: >
+    ("Uninstalled" in (drush_gw_disable.stdout | default(''))) or
+    ((drush_gw_disable.results | map(attribute='stdout') | join(' ')).find('Uninstalled') != -1)
+
+- name: Output for disabling undesired gateway module(s)
+  when: is_drush_target and gw_disable | length > 0
   debug:
-    var: drush_disable_aws_output.stdout_lines
-  when: apigateway == "kong" and inventory_hostname == drush_target_host
-
-- name: Show output for disabling Kong
-  debug:
-    var: drush_disable_kong_output.stdout_lines
-  when: apigateway == "aws" and inventory_hostname == drush_target_host
-
+    msg: >
+      {{ item.item }} -> rc={{ item.rc }}, changed={{ item.changed }},
+      stdout_lines={{ item.stdout_lines | default([]) }}
+  loop: "{{ drush_gw_disable.results | default([]) }}"
+  
+# ---- Enable api_attributes module ----
 - name: disabling zcs_api_attributes module
-  command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_api_attributes -y
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_api_attributes -y
   register: drush_pmu_zcs_api_attributes_output
   when: inventory_hostname == drush_target_host 
 
