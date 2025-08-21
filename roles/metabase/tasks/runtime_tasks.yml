@@ -4,10 +4,35 @@
     state: latest
     update_cache: yes
 
-- name: Install Java for Metabase on RHEL-based systems
-  dnf:
-    name: java-11-openjdk
+# --- Java 21 (required by newer Metabase) ---
+- name: Ensure Java 21 (and headless) are installed
+  ansible.builtin.dnf:
+    name:
+      - java-21-openjdk
+      - java-21-openjdk-headless
     state: present
+
+# Prefer headless package for locating the java binary on RHEL 9
+- name: Find Java 21 binary via RPM (headless)
+  ansible.builtin.shell: "rpm -ql java-21-openjdk-headless | awk '/\\/bin\\/java$/ {print; exit}'"
+  register: java21_bin_rpm
+  changed_when: false
+  failed_when: false
+
+# Fallback to filesystem wildcard in case RPM query returns nothing
+- name: Find Java 21 binary via filesystem (fallback)
+  ansible.builtin.shell: "ls -d /usr/lib/jvm/java-21-openjdk*/bin/java /usr/lib/jvm/jre-21-openjdk*/bin/java 2>/dev/null | head -1"
+  register: java21_bin_fs
+  changed_when: false
+  failed_when: false
+
+
+- name: Set Java binary used by Metabase
+  ansible.builtin.set_fact:
+    metabase_java_bin: >-
+      {{ (java21_bin_rpm.stdout | trim) if (java21_bin_rpm.stdout | trim)
+         else (java21_bin_fs.stdout | trim) if (java21_bin_fs.stdout | trim)
+         else '/usr/bin/java' }}
 
 - name: Create metabase group
   group:
@@ -30,12 +55,14 @@
     mode: '0755'
 
 - name: Download Metabase JAR
-  get_url:
-    url: https://downloads.metabase.com/v0.48.7/metabase.jar
+  ansible.builtin.get_url:
+    url: "https://downloads.metabase.com/{{ metabase_version }}/metabase.jar"
     dest: /var/www/html/shushportal/metabase/metabase.jar
     owner: metabase
     group: metabase
     mode: '0755'
+
+
 
 - name: Create Metabase log file
   file:
@@ -55,7 +82,7 @@
 
       [Service]
       WorkingDirectory=/var/www/html/shushportal/metabase
-      ExecStart=/usr/bin/java --add-opens java.base/java.nio=ALL-UNNAMED -jar /var/www/html/shushportal/metabase/metabase.jar
+      ExecStart={{ metabase_java_bin }} --add-opens java.base/java.nio=ALL-UNNAMED -jar /var/www/html/shushportal/metabase/metabase.jar
       EnvironmentFile=/etc/default/metabase
       User=metabase
       Type=simple
@@ -93,3 +120,199 @@
     name: metabase
     state: started
     enabled: yes
+
+- name: Daemon reload
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Restart metabase
+  ansible.builtin.systemd:
+    name: metabase
+    state: restarted
+    enabled: yes
+
+- name: Wait for Metabase port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ MB_JETTY_PORT | int }}"
+    timeout: 180
+
+# Run AFTER the service is up
+# --- Wait until Metabase finishes initializing ---
+- name: Wait for Metabase port to open
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ MB_JETTY_PORT | default('3001') | int }}"
+    timeout: 300
+
+# Health can be 503 while initializing; poll until 200
+- name: Poll Metabase health until OK
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ MB_JETTY_PORT | default('3001') }}/api/health"
+    method: GET
+    return_content: yes
+    status_code: [200, 503]
+  register: mb_health
+  until: mb_health.status == 200
+  retries: 120          # try for up to ~10 minutes (120 * 5s)
+  delay: 5
+  failed_when: false
+  changed_when: false
+
+# # --- First-time setup: create admin user (idempotent; runs only if token exists) ---
+# - name: Metabase admin rotation vars
+#   ansible.builtin.set_fact:
+#     metabase_initial_email: "elango@shush.pw"
+#     metabase_initial_password: "Shush12345"
+
+# # Ensure a port and base URL are set
+# - name: Ensure MB_JETTY_PORT has a default
+#   ansible.builtin.set_fact:
+#     MB_JETTY_PORT: "{{ MB_JETTY_PORT | default('3001') }}"
+
+# - name: Build metabase_base_url (must include port)
+#   ansible.builtin.set_fact:
+#     metabase_base_url: "http://127.0.0.1:{{ MB_JETTY_PORT }}"
+
+# # Optional: show what we’ll use
+# - name: Show Metabase base URL
+#   ansible.builtin.debug:
+#     msg: "metabase_base_url = {{ metabase_base_url }}"
+
+# # Safety check: fail early if the port is missing
+# - name: Assert base URL includes an explicit port
+#   ansible.builtin.assert:
+#     that:
+#       - metabase_base_url is match('^http://127\\.0\\.0\\.1:\\d+$')
+#     fail_msg: "metabase_base_url must include the Jetty port (e.g., http://127.0.0.1:3001)"
+
+
+# # ------------------------------
+# # Idempotency check: can we already login with the TARGET creds?
+# # ------------------------------
+# - name: Try login with TARGET admin creds
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/session"
+#     method: POST
+#     headers:
+#       Accept: "application/json"
+#       Content-Type: "application/json"
+#     body_format: json
+#     body:
+#       username: "{{ metabase_admin_email }}"
+#       password: "{{ metabase_admin_password }}"
+#     status_code: [200, 400, 401]
+#   register: mb_login_new
+#   changed_when: false
+#   failed_when: false
+
+# - name: Set flag if rotation already done
+#   ansible.builtin.set_fact:
+#     mb_already_rotated: "{{ mb_login_new.status == 200 }}"
+
+# # ------------------------------
+# # Login with INITIAL creds (only if rotation not done)
+# # ------------------------------
+# - name: Login with INITIAL creds
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/session" 
+#     method: POST
+#     headers:
+#       Accept: "application/json"
+#       Content-Type: "application/json"
+#     body_format: json
+#     body:
+#       username: "{{ metabase_initial_email }}"
+#       password: "{{ metabase_initial_password }}"
+#     status_code: [200]
+#   register: mb_session_old
+#   when: not mb_already_rotated
+
+# - name: Build auth headers from session
+#   ansible.builtin.set_fact:
+#     mb_auth_headers:
+#       X-Metabase-Session: "{{ mb_session_old.json.id }}"
+#       Accept: "application/json"
+#       Content-Type: "application/json"
+#   when: not mb_already_rotated
+
+
+# # ------------------------------
+# # Get current user, update EMAIL if needed
+# # ------------------------------
+# - name: Get current user (who we logged in as)
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/session" 
+#     method: GET
+#     headers: "{{ mb_auth_headers }}"
+#     status_code: [200]
+#   register: mb_me
+#   when: not mb_already_rotated
+
+# - name: Update admin email if different
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/user/{{ mb_me.json.id }}"
+#     method: PUT
+#     headers: "{{ mb_auth_headers }}"
+#     body_format: json
+#     body:
+#       email: "{{ metabase_admin_email }}"
+#     status_code: [200]
+#   register: mb_email_update
+#   when: not mb_already_rotated and (mb_me.json.email != metabase_admin_email)
+
+# # ------------------------------
+# # Rotate PASSWORD (only if target creds still don't work)
+# # ------------------------------
+# # Try login with target creds again in case email change already happened earlier
+# - name: Re-check login with TARGET creds
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/session"
+#     method: POST
+#     headers:
+#       Accept: "application/json"
+#       Content-Type: "application/json"
+#     body_format: json
+#     body:
+#       username: "{{ metabase_admin_email }}"
+#       password: "{{ metabase_admin_password }}"
+#     status_code: [200, 400, 401]
+#   register: mb_login_new_after_email
+#   changed_when: false
+#   failed_when: false
+#   when: not mb_already_rotated
+
+# - name: Change admin password using INITIAL password
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/user/{{ mb_me.json.id }}/password"
+#     method: POST
+#     headers: "{{ mb_auth_headers }}"
+#     body_format: json
+#     body:
+#       old_password: "{{ metabase_initial_password }}"
+#       password: "{{ metabase_admin_password }}"
+#       password_confirm: "{{ metabase_admin_password }}"
+#     status_code: [200, 204]
+#   when: not mb_already_rotated and (mb_login_new_after_email.status != 200)
+
+# # ------------------------------
+# # Final verification
+# # ------------------------------
+# - name: Final login with TARGET creds (must succeed)
+#   ansible.builtin.uri:
+#     url: "{{ metabase_base_url }}/api/session"
+#     method: POST
+#     headers:
+#       Accept: "application/json"
+#       Content-Type: "application/json"
+#     body_format: json
+#     body:
+#       username: "{{ metabase_admin_email }}"
+#       password: "{{ metabase_admin_password }}"
+#     status_code: [200]
+#   register: mb_session_final
+#   changed_when: false
+
+# - name: Report final admin identity
+#   ansible.builtin.debug:
+#     msg: "Metabase admin rotated. Login as {{ metabase_admin_email }}"

@@ -1,19 +1,17 @@
 ---
 # Default variables for startup_setup role
-metabase_version: "v0.49.10"
-metabase_admin_email: "admin@shush.tech"
-metabase_admin_password: "StrongPassword123!"
+metabase_version: "v0.55.4"
 #mysql_host: "10.128.0.39"
 #metabase
 MB_PASSWORD_COMPLEXITY: "strong"
-MB_DB_PASS: "StrongPassword123!"
+MB_DB_PASS: "{{ hostvars[groups['dbs'][0]].db_password }}"
 MB_PASSWORD_LENGTH: "10"
 #MB_JETTY_HOST: "10.128.0.8"  # optional
 MB_JETTY_PORT: "3001"
 MB_DB_TYPE: "mysql"
-MB_DB_DBNAME: "metabase_db"
+MB_DB_DBNAME: "{{ hostvars[groups['dbs'][0]].metabase_db_name }}"
 MB_DB_PORT: "3306"
-MB_DB_USER: "metabase_user"
-MB_DB_HOST: "10.128.0.39"
+MB_DB_USER: "{{ hostvars[groups['dbs'][0]].db_user }}"
+MB_DB_HOST: "{{ hostvars[groups['dbs'][0]].db_host }}"
 MB_EMOJI_IN_LOGS: "true"
 sql_file_path: "/tmp/metabase_db.sql"
