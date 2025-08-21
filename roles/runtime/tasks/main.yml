@@ -460,25 +460,25 @@
 
 
 # ---- Enable api_attributes module ----
-- name: disabling zcs_api_attributes module
-  command: /var/www/html/shushportal/vendor/bin/drush en zcs_api_attributes -y
-  register: drush_pmu_zcs_api_attributes_output
-  when: inventory_hostname == drush_target_host 
+# - name: disabling zcs_api_attributes module
+#   command: /var/www/html/shushportal/vendor/bin/drush en zcs_api_attributes -y
+#   register: drush_pmu_zcs_api_attributes_output
+#   when: inventory_hostname == drush_target_host 
 
-- name: Show output for disabling zcs_api_attributess
-  debug:
-    var: drush_pmu_zcs_api_attributes_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
+# - name: Show output for disabling zcs_api_attributess
+#   debug:
+#     var: drush_pmu_zcs_api_attributes_output.stdout_lines
+#   when: inventory_hostname == drush_target_host 
 
-- name: Enable zcs_custom module
-  command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
-  register: drush_en_zcs_custom_output
-  when: inventory_hostname == drush_target_host 
+# - name: Enable zcs_custom module
+#   command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
+#   register: drush_en_zcs_custom_output
+#   when: inventory_hostname == drush_target_host 
 
-- name: Show output for enabling zcs_custom
-  debug:
-    var: drush_en_zcs_custom_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
+# - name: Show output for enabling zcs_custom
+#   debug:
+#     var: drush_en_zcs_custom_output.stdout_lines
+#   when: inventory_hostname == drush_target_host 
 
 - name: Run database updates
   command: /var/www/html/shushportal/vendor/bin/drush updb

@@ -46,6 +46,18 @@
     name: python3-pip
     state: present
 
+# (Optional) PHP bits are not needed on a DB VM; remove if this is DB-only
+- name: Install Python + tooling
+  dnf:
+    name:
+      - epel-release
+      - python3
+      - python3-pip
+      - python3-PyMySQL        # driver Ansible uses
+      # - python3-mysqlclient  # not required by Ansible; PyMySQL is enough
+    state: present
+
+
 - name: Install MySQL server
   dnf:
     name: mysql-server
@@ -78,35 +90,31 @@
     priv: "{{ db_name }}.*:ALL"
     state: present
 
-- name: Create admin MySQL user with access to the database
-  mysql_user:
-    login_user: root
-    name: "{{ db_admin_user }}"
-    password: "{{ db_admin_password }}"
+- name: Allow {{ db_user }} from localhost
+  community.mysql.mysql_user:
+    name: "{{ db_user }}"
+    host: "localhost"
+    password: "{{ db_password }}"
+    plugin: mysql_native_password   # FIX: was auth_plugin
+    update_password: always
     priv: "{{ db_name }}.*:ALL"
     state: present
-    
-- name: Grant all privileges to 'devportal' from any host
-  mysql_user:
-    name: "{{ db_user }}"
-    host: "%"
-    password: "{{ db_password }}"
-    priv: "*.*:ALL"
-    state: present
-  vars:
-    db_user: devportal
-    db_password: pass
+    login_user: root
+    check_implicit_admin: true
 
-- name: Grant all privileges to 'admin' from any host
-  mysql_user:
-    name: "{{ db_admin_user }}"
-    host: "%"
-    password: "{{ db_admin_password }}"
-    priv: "*.*:ALL"
+# Grant from each inventory host (IP) — tighter than '%'
+- name: Allow {{ db_user }} from each inventory host
+  community.mysql.mysql_user:
+    name: "{{ db_user }}"
+    host: "{{ hostvars[item].ansible_host | default(item) }}"
+    password: "{{ db_password }}"
+    plugin: mysql_native_password
+    update_password: always
+    priv: "{{ db_name }}.*:ALL"
     state: present
-  vars:
-    db_admin_user: admin
-    db_admin_password: pass
+    login_user: root
+    check_implicit_admin: true
+  loop: "{{ groups['all'] | difference(['localhost']) }}"
 
 
 - name: Import SQL file into MySQL database
