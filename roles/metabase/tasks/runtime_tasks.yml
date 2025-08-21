@@ -1,4 +1,3 @@
----
 - name: Update the package index on RHEL
   dnf:
     name: "*"
@@ -24,24 +23,18 @@
 
 - name: Create Metabase directory
   file:
-    path: /var/www/html/shushportal//metabase
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-
-- name: Ensure ownership of Metabase directory
-  file:
     path: /var/www/html/shushportal/metabase
     state: directory
     owner: metabase
     group: metabase
-    recurse: yes
-    
+    mode: '0755'
+
 - name: Download Metabase JAR
   get_url:
     url: https://downloads.metabase.com/v0.48.7/metabase.jar
-    dest: /var/www/html/shushportal/metabase.jar
+    dest: /var/www/html/shushportal/metabase/metabase.jar
+    owner: metabase
+    group: metabase
     mode: '0755'
 
 - name: Create Metabase log file
@@ -66,17 +59,15 @@
       EnvironmentFile=/etc/default/metabase
       User=metabase
       Type=simple
-      StandardOutput=syslog
-      StandardError=syslog
-      SyslogIdentifier=metabase
+      StandardOutput=append:/var/log/metabase.log
+      StandardError=append:/var/log/metabase.log
       SuccessExitStatus=143
       TimeoutStopSec=120
       Restart=always
 
       [Install]
       WantedBy=multi-user.target
-    
-  #notify: Restart Metabase
+
 - name: Initialize metabase_env_vars
   set_fact:
     metabase_env_vars: {}
@@ -85,7 +76,6 @@
   set_fact:
     metabase_env_vars: "{{ metabase_env_vars | combine({ item: lookup('vars', item) }) }}"
   loop: "{{ vars.keys() | select('match', '^MB_') | list }}"
-
 
 - name: Create Metabase environment file
   copy:
@@ -97,16 +87,6 @@
     owner: metabase
     group: metabase
     mode: '0644'
-
-
-- name: Create rsyslog config for Metabase
-  copy:
-    dest: /etc/rsyslog.d/metabase.conf
-    content: |
-      if $programname == 'metabase' then /var/log/metabase.log
-      & stop
-  notify: Restart rsyslog
-
 
 - name: Start and enable Metabase service
   systemd:

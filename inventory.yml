@@ -8,6 +8,7 @@ moriarty:
           db_name: "moriaty"
           db_user: "devportal"
           db_password: "pass"
+          metabase_db_name: "metabase"
     runtime:
       hosts:
         10.211.139.56:
