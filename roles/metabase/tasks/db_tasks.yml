@@ -1,53 +1,89 @@
 ---
+- name: Ensure MySQL Python driver is present
+  package:
+    name: python3-PyMySQL
+    state: present
+
 - name: Ensure MySQL service is started and enabled
   service:
     name: mysqld
     state: started
     enabled: yes
 
-- name: Create Metabase database
-  mysql_db:
-    name: "{{ db_name }}"
+- name: Resolve Metabase DB connection from dbs group
+  set_fact:
+    mb_db_name:  "{{ hostvars[groups['dbs'][0]].metabase_db_name | default(hostvars[groups['dbs'][0]].metabase_db_name) }}"
+    mb_db_user:  "{{ hostvars[groups['dbs'][0]].metabase_db_user | default(hostvars[groups['dbs'][0]].db_user) }}"
+    mb_db_pass:  "{{ hostvars[groups['dbs'][0]].metabase_db_password | default(hostvars[groups['dbs'][0]].db_password) }}"
+   
+
+- name: Show resolved Metabase DB connection values
+  debug:
+    msg:
+      - "Metabase DB Name: {{ mb_db_name }}"
+      - "Metabase DB User: {{ mb_db_user }}"
+      - "Metabase DB Pass: {{ mb_db_pass }}"
+
+- name: Check if Metabase DB exists
+  community.mysql.mysql_query:
+    query: "SHOW DATABASES LIKE '{{ mb_db_name }}';"
+    login_user: root
+  register: mb_db_check
+
+- name: Show DB check result
+  debug:
+    var: mb_db_check.query_result
+
+- name: Create Metabase database if missing
+  community.mysql.mysql_db:
+    name: "{{ mb_db_name }}"
     state: present
     login_user: root
+  when: mb_db_check.query_result | length == 0 or (mb_db_check.query_result[0] | length == 0)
 
-- name: Create Metabase user for localhost
-  mysql_user:
-    name: "{{ db_user }}"
-    password: "{{ db_password }}"
+
+- name: Check if Metabase DB exists after DB creation 
+  community.mysql.mysql_query:
+    query: "SHOW DATABASES LIKE '{{ mb_db_name }}';"
+    login_user: root
+  register: mb_db_check
+
+- name: Show DB check result  after DB creation 
+  debug:
+    var: mb_db_check.query_result
+    
+
+- name: Ensure Metabase user for localhost
+  community.mysql.mysql_user:
+    name: "{{ mb_db_user }}"
+    password: "{{ mb_db_pass }}"
     host: "localhost"
-    priv: "{{ db_name }}.*:ALL"
+    priv: "{{ mb_db_name }}.*:ALL"
+    plugin: "mysql_native_password"
     state: present
     login_user: root
 
-- name: Create Metabase user for any host (%)
-  mysql_user:
-    name: "{{ db_user }}"
-    password: "{{ db_password }}"
+- name: Ensure Metabase user for any host (%)
+  community.mysql.mysql_user:
+    name: "{{ mb_db_user }}"
+    password: "{{ mb_db_pass }}"
     host: "%"
-    priv: "{{ db_name }}.*:ALL"
+    priv: "{{ mb_db_name }}.*:ALL"
     state: present
     login_user: root
 
-- name: Alter user to use mysql_native_password (localhost)
-  mysql_user:
-    name: "{{ db_user }}"
-    host: "localhost"
-    password: "{{ db_password }}"
-    login_user: root
-    plugin: mysql_native_password
-    state: present
-    update_password: always
+- name: Copy SQL file template to destination server
+  template:
+    src: metabase_db.sql 
+    dest: "{{ sql_file_path }}"
+    mode: '0644'
 
-- name: Alter user to use mysql_native_password (%)
-  mysql_user:
-    name: "{{ db_user }}"
-    host: "%"
-    password: "{{ db_password }}"
-    login_user: root
-    plugin: mysql_native_password
-    state: present
-    update_password: always
+- name: Import SQL file into MySQL database
+  shell: >
+    mysql -u root {{ mb_db_name }} < {{ sql_file_path }}
+  args:
+    chdir: /
+
 
 - name: Flush privileges
   shell: "mysql -u root -e 'FLUSH PRIVILEGES;'"
