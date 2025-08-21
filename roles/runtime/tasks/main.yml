@@ -376,57 +376,88 @@
   debug:
     msg: "apigateway is set to: {{ apigateway }} (validation OK)"
 
+# --- Gateway module orchestration (idempotent) ---
+
+# Compute desired sets from apigateway (kong/aws/none)
 - name: Compute gateway enable/disable sets
-  when: is_drush_target
+  when: is_drush_target | default(false)
   set_fact:
     gw_enable: "{{ ['zcs_kong'] if apigateway == 'kong' else (['zcs_aws'] if apigateway == 'aws' else []) }}"
     gw_disable: "{{ ['zcs_aws'] if apigateway == 'kong' else (['zcs_kong'] if apigateway == 'aws' else ['zcs_kong','zcs_aws']) }}"
-  register: gw_sets
 
 - name: Show computed gateway sets
-  when: is_drush_target
+  when: is_drush_target | default(false)
   debug:
     msg:
       - "Modules to ENABLE: {{ gw_enable | join(', ') if gw_enable | length > 0 else 'none' }}"
       - "Modules to DISABLE: {{ gw_disable | join(', ') if gw_disable | length > 0 else 'none' }}"
 
-- name: Enable desired gateway module(s)
-  when: is_drush_target and gw_enable | length > 0
+# Ask Drush once which modules are enabled
+- name: Get list of enabled modules
+  when: is_drush_target | default(false)
+  command: /var/www/html/shushportal/vendor/bin/drush pml --status=enabled --format=list
+  args:
+    chdir: /var/www/html/shushportal
+  register: drush_enabled_modules
+  changed_when: false
+  failed_when: false
+
+# --- Enable only if not already enabled ---
+- name: Enable desired gateway module(s) (only if disabled)
+  when:
+    - is_drush_target | default(false)
+    - gw_enable | length > 0
+    - (drush_enabled_modules.stdout_lines | default([])) is iterable
+    - item not in (drush_enabled_modules.stdout_lines | default([]))
+  loop: "{{ gw_enable }}"
+  loop_control: { label: "{{ item }}" }
   command: /var/www/html/shushportal/vendor/bin/drush en {{ item }} -y
   args:
     chdir: /var/www/html/shushportal
-  loop: "{{ gw_enable }}"
   register: drush_gw_enable
-  changed_when: "'installed' in (drush_gw_enable.stdout | default('')) or (drush_gw_enable.results | map(attribute='stdout') | join(' ') | lower).find('installed') != -1"
   failed_when: false
+  changed_when: >
+    ('success' in
+      ((drush_gw_enable.stdout | default('')) ~ (drush_gw_enable.stderr | default('')) ) | lower)
 
 - name: Output for enabling desired gateway module(s)
-  when: is_drush_target and gw_enable | length > 0
+  when: is_drush_target | default(false)
   debug:
-     msg: >
-      {{ item.item }} -> rc={{ item.rc }}, changed={{ item.changed }},
-      stdout_lines={{ item.stdout_lines | default([]) }}
+    msg: >
+      {{ (item.item | default('n/a')) }} -> rc={{ item.rc | default('n/a') }},
+      changed={{ item.changed | default(false) }},
+      stdout_lines={{ item.stdout_lines | default([]) }},
+      stderr_lines={{ item.stderr_lines | default([]) }}
   loop: "{{ drush_gw_enable.results | default([]) }}"
 
-- name: Disable undesired gateway module(s)
-  when: is_drush_target and gw_disable | length > 0
+# --- Disable only if currently enabled (default state is disabled) ---
+- name: Disable undesired gateway module(s) (only if enabled)
+  when:
+    - is_drush_target | default(false)
+    - gw_disable | length > 0
+    - (drush_enabled_modules.stdout_lines | default([])) is iterable
+    - item in (drush_enabled_modules.stdout_lines | default([]))
+  loop: "{{ gw_disable }}"
+  loop_control: { label: "{{ item }}" }
   command: /var/www/html/shushportal/vendor/bin/drush pmu {{ item }} -y
   args:
     chdir: /var/www/html/shushportal
-  loop: "{{ gw_disable }}"
   register: drush_gw_disable
   failed_when: false
   changed_when: >
-    ("Uninstalled" in (drush_gw_disable.stdout | default(''))) or
-    ((drush_gw_disable.results | map(attribute='stdout') | join(' ')).find('Uninstalled') != -1)
+    ('success' in
+      ((drush_gw_disable.stdout | default('')) ~ (drush_gw_disable.stderr | default('')) ) | lower)
 
 - name: Output for disabling undesired gateway module(s)
-  when: is_drush_target and gw_disable | length > 0
+  when: is_drush_target | default(false)
   debug:
     msg: >
-      {{ item.item }} -> rc={{ item.rc }}, changed={{ item.changed }},
-      stdout_lines={{ item.stdout_lines | default([]) }}
+      {{ (item.item | default('n/a')) }} -> rc={{ item.rc | default('n/a') }},
+      changed={{ item.changed | default(false) }},
+      stdout_lines={{ item.stdout_lines | default([]) }},
+      stderr_lines={{ item.stderr_lines | default([]) }}
   loop: "{{ drush_gw_disable.results | default([]) }}"
+
 
 # ---- Enable api_attributes module ----
 - name: disabling zcs_api_attributes module

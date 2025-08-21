@@ -5,6 +5,9 @@ moriarty:
       hosts:
         10.211.139.58:
           db_host: "10.211.139.58" 
+          db_name: "moriaty"
+          db_user: "devportal"
+          db_password: "pass"
     runtime:
       hosts:
         10.211.139.56:
