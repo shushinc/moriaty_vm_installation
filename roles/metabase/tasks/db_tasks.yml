@@ -60,6 +60,7 @@
     host: "localhost"
     priv: "{{ mb_db_name }}.*:ALL"
     plugin: "mysql_native_password"
+    append_privs: true          # <— important
     state: present
     login_user: root
 
@@ -69,20 +70,22 @@
     password: "{{ mb_db_pass }}"
     host: "%"
     priv: "{{ mb_db_name }}.*:ALL"
+    append_privs: true          # <— important
     state: present
     login_user: root
 
-- name: Copy SQL file template to destination server
-  template:
-    src: metabase_db.sql 
-    dest: "{{ sql_file_path }}"
+- name: Copy SQL dump to destination server (explicit path)
+  copy:
+    src: "{{ role_path }}/templates/metabase_db.sql"
+    dest: "{{ sql_file_path | default('/tmp/metabase_db.sql') }}"
     mode: '0644'
 
-- name: Import SQL file into MySQL database
-  shell: >
-    mysql -u root {{ mb_db_name }} < {{ sql_file_path }}
-  args:
-    chdir: /
+- name: Import SQL dump into {{ mb_db_name }}
+  community.mysql.mysql_db:
+    name: "{{ mb_db_name }}"
+    state: import
+    target: "{{ sql_file_path | default('/tmp/metabase_db.sql') }}"
+    login_user: root
 
 
 - name: Flush privileges
