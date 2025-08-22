@@ -27,6 +27,9 @@ $settings['file_temp_path'] = '/tmp';
 #$settings['reverse_proxy'] = TRUE;
 #$settings['reverse_proxy_addresses'] = ['127.0.0.1', '0.0.0.0'];
 
+$config['metabase.settings']['metabase']['internal']['base_url'] = 'http://localhost:3001';
+$config['metabase.settings']['embeding']['force_https'] = FALSE;
+
 $salt_file = $settings['file_private_path'] ."/salt.txt";
 if(!file_exists($salt_file)) {
     file_put_contents($salt_file, 'secret');
