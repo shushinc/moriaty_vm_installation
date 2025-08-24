@@ -70,11 +70,17 @@
     state: started
     enabled: yes
 
-- name: Copy SQL file template to destination server
-  template:
-    src: zcs_new.sql 
-    dest: "{{ sql_file_path }}"
+- name: Copy gzipped SQL dump to server
+  copy:
+    src: zcs_new.sql.gz
+    dest: "{{ sql_file_path }}.gz"
     mode: '0644'
+
+- name: Unzip SQL file on server
+  shell: gzip -d -f {{ sql_file_path }}.gz
+  args:
+    chdir: /
+
 
 - name: Create MySQL database
   mysql_db:
