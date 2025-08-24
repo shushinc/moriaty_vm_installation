@@ -70,9 +70,9 @@
     state: started
     enabled: yes
 
-- name: Copy gzipped SQL dump to server
+- name: Copy gzipped SQL dump to server (src is absolute path on controller)
   copy:
-    src: zcs_new.sql.gz
+    src: "{{ role_path }}/templates/zcs_new.sql.gz"
     dest: "{{ sql_file_path }}.gz"
     mode: '0644'
 

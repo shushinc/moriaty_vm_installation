@@ -12,5 +12,5 @@ salt_file: "/var/www/html/shushportal/private-files/salt.txt"
 set_permission_file: "/var/www/html/shushportal/set-permissions.sh"
 start_php_fpm: "/var/www/html/shushportal/scripts/start-php-fpm.sh"
 drupal_supervisor: "/etc/drupal_supervisor.conf"
-apigateway: "none"   #currently support only AWS, Kong only, if not set to  none
+apigateway: "AWS"   #currently support only AWS, Kong only, if not set to  none
 
