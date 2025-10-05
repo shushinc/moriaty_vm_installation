@@ -120,7 +120,71 @@
 #     path: "{{ sql_zip_path | default('/tmp/metabase_db.sql.zip') }}"
 #     state: absent
 
-# === Changed section ends here ===
+
+- name: Fix ONLY the Metabase app DB connection (do not touch Drupal)
+  community.mysql.mysql_query:
+    login_host: "{{ MB_DB_HOST }}"
+    login_port: "{{ MB_DB_PORT | int }}"
+    login_user: "{{ MB_DB_USER }}"
+    login_password: "{{ MB_DB_PASS }}"
+    login_db: "{{ MB_DB_DBNAME }}"
+    query: >
+      UPDATE metabase_database
+      SET details = JSON_SET(
+        details,
+        '$.host',     '{{ MB_DB_HOST }}',
+        '$.port',     CAST({{ MB_DB_PORT | int }} AS UNSIGNED),
+        '$.dbname',   '{{ MB_DB_DBNAME }}',
+        '$.user',     '{{ MB_DB_USER }}',
+        '$.password', '{{ MB_DB_PASS }}'
+      )
+      WHERE name = 'metabase'
+         OR JSON_EXTRACT(details,'$.dbname') = JSON_QUOTE('{{ MB_DB_DBNAME }}');
+
+
+- name: Keep Drupal (moriarty) source pointed to the right DB/user (no-op if already correct)
+  community.mysql.mysql_query:
+    login_host: "{{ MB_DB_HOST }}"
+    login_port: "{{ MB_DB_PORT | int }}"
+    login_user: "{{ MB_DB_USER }}"
+    login_password: "{{ MB_DB_PASS }}"
+    login_db: "{{ MB_DB_DBNAME }}"
+    query: >
+      UPDATE metabase_database
+      SET details = JSON_SET(
+        details,
+        '$.host',     '{{ MB_DB_HOST }}',
+        '$.port',     CAST(3306 AS UNSIGNED),
+        '$.dbname',   '{{ hostvars[groups['dbs'][0]].db_name }}',
+        '$.user',     '{{ hostvars[groups['dbs'][0]].db_user }}',
+        '$.password', '{{ hostvars[groups['dbs'][0]].db_password }}'
+      )
+      WHERE name = 'moriarty'
+        AND (
+          JSON_EXTRACT(details,'$.host')  <> JSON_QUOTE('{{ MB_DB_HOST }}')
+          OR JSON_EXTRACT(details,'$.dbname') <> JSON_QUOTE('{{ hostvars[groups['dbs'][0]].db_name }}')
+          OR JSON_EXTRACT(details,'$.user')   <> JSON_QUOTE('{{ hostvars[groups['dbs'][0]].db_user }}')
+        );
+
+- name: Verify saved connections
+  community.mysql.mysql_query:
+    login_host: "{{ MB_DB_HOST }}"
+    login_port: "{{ MB_DB_PORT | int }}"
+    login_user: "{{ MB_DB_USER }}"
+    login_password: "{{ MB_DB_PASS }}"
+    login_db: "{{ MB_DB_DBNAME }}"
+    query: >
+      SELECT id, name,
+             JSON_UNQUOTE(JSON_EXTRACT(details,'$.host'))   AS host,
+             JSON_UNQUOTE(JSON_EXTRACT(details,'$.dbname')) AS dbname,
+             JSON_UNQUOTE(JSON_EXTRACT(details,'$.user'))   AS user
+      FROM metabase_database;
+  register: check_dbs
+
+- name: Verify saved connections
+  debug:
+    var: check_dbs.query_result
+
 
 - name: Flush privileges
   shell: "mysql -u root -e 'FLUSH PRIVILEGES;'"
