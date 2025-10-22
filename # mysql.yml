@@ -1,0 +1,291 @@
+# mysql
+- name: (SELinux) ensure tools present
+  package:
+    name: policycoreutils-python-utils
+    state: present
+  tags: [mysql, mysql_install]
+  when: ansible_os_family == "RedHat"
+
+- name: Install MySQL server
+  dnf:
+    name: mysql-server
+    state: present
+    update_cache: yes
+  tags: [mysql, mysql_install]
+
+# —— CONFIG ————————————————————————————————————————————————————————————————
+# Safer server-id + modern log option; keep super_read_only for runtime SQL.
+- name: Write /etc/my.cnf.d/server.cnf (GTID + ROW, per-role differences)
+  copy:
+    dest: /etc/my.cnf.d/server.cnf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      {% set sid = (((inventory_hostname | hash('sha1'))[0:8] | int(base=16)) % 4294967294) + 1 %}
+      [mysqld]
+      server-id = {{ sid }}
+      binlog_format = ROW
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      log_replica_updates = ON
+      binlog_expire_logs_seconds = 2592000
+      binlog_row_image = FULL
+
+      {% if inventory_hostname in groups['db_primary'] %}
+      # PRIMARY
+      log_bin = mysql-bin
+      innodb_flush_log_at_trx_commit = 1
+      sync_binlog = 1
+      {% else %}
+      # REPLICA
+      read_only = ON
+      relay_log = relay-bin
+      log_bin = mysql-bin
+      {% endif %}
+  notify: Restart MySQL
+  tags: [mysql, mysql_config]
+
+# Fix perms & SELinux contexts *before* first start (prevents Error 13).
+- name: Ensure MySQL data dir exists and owned by mysql
+  file:
+    path: /var/lib/mysql
+    state: directory
+    owner: mysql
+    group: mysql
+    mode: '0700'
+  tags: [mysql, mysql_install]
+
+- name: Restore SELinux contexts on MySQL paths
+  command: restorecon -Rv /var/lib/mysql /etc/my.cnf /etc/my.cnf.d
+  changed_when: false
+  failed_when: false
+  tags: [mysql, mysql_install]
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure MySQL service is enabled and running
+  service:
+    name: mysqld
+    state: started
+    enabled: yes
+  tags: [mysql, mysql_install, mysql_config]
+
+# —— PRIMARY INIT ————————————————————————————————————————————————————————
+- name: Create Drupal database (primary only)
+  community.mysql.mysql_db:
+    name: "{{ db_name }}"
+    state: present
+    login_user: root
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_primary_init]
+
+- name: Create Drupal user and grant privileges (primary only)
+  community.mysql.mysql_user:
+    name: "{{ db_user }}"
+    host: "%"
+    password: "{{ db_password }}"
+    priv: "{{ db_name }}.*:ALL"
+    plugin: mysql_native_password
+    update_password: on_create
+    state: present
+    login_user: root
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_primary_init]
+
+- name: Create replication user (primary only)
+  community.mysql.mysql_user:
+    name: "repl"
+    host: "10.%"
+    password: "{{ repl_password }}"
+    priv: "*.*:REPLICATION SLAVE"
+    plugin: mysql_native_password
+    update_password: on_create
+    state: present
+    login_user: root
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_primary_init]
+
+
+- name: Create GTID-aware dump on PRIMARY
+  shell: >
+    mysqldump --single-transaction --quick --routines --triggers
+    --master-data=2 --set-gtid-purged=ON
+    --databases {{ db_name }} | gzip > /tmp/seed.sql.gz
+  args:
+    creates: /tmp/seed.sql.gz
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed]
+
+- name: Fetch seed dump to controller
+  fetch:
+    src: /tmp/seed.sql.gz
+    dest: "/tmp/mysql-seed.sql.gz"
+    flat: yes
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed]
+
+# (Controller-side) sanity: dump’s GTID_PURGED UUID matches current primary UUID.
+- name: Sanity check dump GTID_PURGED UUID (controller)
+  delegate_to: localhost
+  run_once: true
+  shell: |
+    set -euo pipefail
+    zcat /tmp/mysql-seed.sql.gz | sed -n '1,200p' \
+      | grep -m1 -E "SET @@GLOBAL.GTID_PURGED" \
+      | sed -E "s/.*'([^']+)'.*/\1/" \
+      | awk -F: '{print $1}'
+  register: dump_uuid
+  changed_when: false
+  tags: [mysql, mysql_seed]
+
+# Get just the primary UUID (single query => flat structure)
+- name: Get primary server_uuid (primary only)
+  community.mysql.mysql_query:
+    login_user: root
+    query: "SELECT @@server_uuid AS uuid"
+  register: primary_uuid_q
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed]
+
+# (optional) keep GTID if you still want it somewhere else later
+- name: Get primary GTID_EXECUTED (primary only)
+  community.mysql.mysql_query:
+    login_user: root
+    query: "SELECT @@GLOBAL.GTID_EXECUTED AS g"
+  register: primary_gtid_q
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed]
+
+# Use the flat structure in the compare
+- name: Fail if dump UUID != primary UUID (controller)
+  delegate_to: localhost
+  run_once: true
+  fail:
+    msg: >
+      Dump GTID_PURGED UUID ({{ dump_uuid.stdout }}) != primary @@server_uuid
+      ({{ primary_uuid_q.query_result[0][0].uuid }}). Recreate the dump from the current primary.
+  when:
+    - primary_uuid_q is defined
+    - dump_uuid.stdout is defined
+    - dump_uuid.stdout | length > 0
+    # CORRECTED: Access the first row [0] of the first query result [0]
+    - dump_uuid.stdout != primary_uuid_q.query_result[0][0].uuid
+  tags: [mysql, mysql_seed]
+
+
+- name: Push local seed dump to REPLICAS
+  copy:
+    # This path is relative to your playbook file.
+    # Adjust it if your 'roles' dir is elsewhere.
+    src: roles/dbs/templates/zcs_new.sql.gz
+    dest: /tmp/seed.sql.gz
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+# —— REPLICA PREP ——————————————————————————————————————————————————————————
+- name: STOP REPLICA on replicas (ignore if clean)
+  community.mysql.mysql_replication:
+    mode: stopreplica
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  ignore_errors: yes
+  tags: [mysql, mysql_seed]
+
+- name: Read GTID_EXECUTED on replicas
+  community.mysql.mysql_query:
+    login_user: root
+    query: "SELECT @@GLOBAL.GTID_EXECUTED AS g"
+  register: gtidq
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+# Hard guard: fail if replica already has local GTIDs (prevents GTID_PURGED skip).
+- name: Fail if replica has local GTIDs before import
+  fail:
+    msg: "Replica has local GTIDs ({{ gtidq.query_result[0].g }}). Aborting import to protect GTID_PURGED."
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - gtidq.query_result is defined
+    - (gtidq.query_result[0].g | default('')) | length > 0
+  tags: [mysql, mysql_seed]
+
+# If you prefer auto-fix instead of fail, swap the above with RESETs:
+# - name: RESET REPLICA ALL and RESET MASTER (force clean GTIDs)
+#   community.mysql.mysql_query:
+#     login_user: root
+#     query:
+#       - "RESET REPLICA ALL"
+#       - "RESET MASTER"
+#   when: inventory_hostname in groups['db_replicas']
+#   tags: [mysql, mysql_seed]
+
+- name: Disable read_only/super_read_only on REPLICAS for initial import
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: Ensure plain SQL exists on REPLICAS
+  shell: gunzip -c /tmp/seed.sql.gz > /tmp/seed.sql
+  args:
+    creates: /tmp/seed.sql
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+# IMPORTANT: do NOT pre-create DB on replicas; let the dump do it (with GTID_PURGED).
+# (The old task has been intentionally removed.)
+
+- name: Import plain SQL on REPLICAS (applies SET @@GLOBAL.GTID_PURGED)
+  community.mysql.mysql_db:
+    name: "{{ db_name }}"
+    state: import
+    target: /tmp/seed.sql
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: Re-enable read_only/super_read_only on REPLICAS after import
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+# —— ATTACH REPLICA (GTID) ————————————————————————————————————————————————
+- name: CHANGE PRIMARY (GTID) on replicas
+  community.mysql.mysql_replication:
+    mode: changeprimary
+    master_host: "{{ hostvars[groups['db_primary'][0]].ansible_host | default(groups['db_primary'][0]) }}"
+    master_user: "repl"
+    master_password: "{{ repl_password }}"
+    master_port: 3306
+    master_auto_position: yes
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_replication]
+
+- name: START REPLICA on replicas
+  community.mysql.mysql_replication:
+    mode: startreplica
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_replication]
+
+- name: Get replication status (replicas)
+  community.mysql.mysql_replication:
+    mode: getreplica
+    login_user: root
+  register: repl_status
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_check]
+
+- name: Show replication summary (replicas)
+  debug:
+    var: repl_status
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_check]

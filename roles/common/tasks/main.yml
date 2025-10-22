@@ -1,0 +1,28 @@
+- name: Enable EPEL repository
+  dnf:
+    name: epel-release
+    state: present
+  tags: [base]
+
+- name: Update package index (RHEL/Rocky)
+  dnf:
+    name: "*"
+    state: latest
+    update_cache: yes
+  tags: [base]
+
+- name: Install Python 3 + pip and system tooling
+  dnf:
+    name:
+      - python3
+      - python3-pip
+      - python3-PyMySQL
+      - git
+      - unzip
+      - tar
+      - gzip
+      - curl
+      - wget
+      - jq
+    state: present
+  tags: [base]

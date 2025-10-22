@@ -38,9 +38,15 @@ vi roles/runtime/tasks/main.yml ( Line Number 122)
 3. In the root directory, run the Ansible playbook to provision the cluster:
 
 ```bash
-ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql
-ansible-playbook playbook/sites.yaml -i inventory.yml --tags moriarty
-ansible-playbook playbook/sites.yaml -i inventory.yml --tags metabase
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags base
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql 
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags moriarty 
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags metabase --private-key ~/.ssh/id_rsa_ansible
+
+If you face any SSH key issue use below private-key flag:
+
+--private-key ~/.ssh/id_rsa_ansible
+
 
 ```
 
@@ -74,5 +80,3 @@ Turn OFF CRON:
 1. Go this path : /admin/config/system/cron
 2. Make the option cron option  to never
 3. SAVE
-
-
