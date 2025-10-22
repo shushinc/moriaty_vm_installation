@@ -68,26 +68,19 @@
     enabled: yes
   tags: [mysql, mysql_install, mysql_config]
 
-- name: Create Drupal database (primary only)
-  community.mysql.mysql_db:
-    name: "{{ db_name }}"
-    state: present
-    login_user: root
-  when: inventory_hostname in groups['db_primary']
-  tags: [mysql, mysql_primary_init]
-
-- name: Create Drupal user and grant privileges (primary only)
+- name: Create replication user (primary only)
   community.mysql.mysql_user:
-    name: "{{ db_user }}"
-    host: "%"
-    password: "{{ db_password }}"
-    priv: "{{ db_name }}.*:ALL"
+    name: "repl"
+    host: "10.%"
+    password: "{{ repl_password }}"
+    priv: "*.*:REPLICATION SLAVE"
     plugin: mysql_native_password
     update_password: on_create
     state: present
     login_user: root
   when: inventory_hostname in groups['db_primary']
   tags: [mysql, mysql_primary_init]
+
 
 - name: Create replication user (primary only)
   community.mysql.mysql_user:
@@ -123,6 +116,43 @@
     login_user: root
   when: inventory_hostname in groups['db_primary']
   tags: [mysql, mysql_seed_external]
+
+
+# give moriarty user grants
+
+- name: Collect web node IPs from 'runtime' group
+  set_fact:
+    _web_ips: >-
+      {{
+        groups.get('runtime', [])
+        | map('extract', hostvars, 'ansible_host')
+        | select('defined')
+        | list
+      }}
+  when: inventory_hostname in groups['db_primary']
+
+- name: Build host grant list for Drupal user
+  set_fact:
+    _drupal_grant_hosts: >-
+      {{
+        (['%','10.%'] + (_web_ips | default([])))
+        | unique
+      }}
+  when: inventory_hostname in groups['db_primary']
+
+- name: Ensure Drupal user can connect from all allowed hosts
+  community.mysql.mysql_user:
+    name: "{{ db_user }}"
+    host: "{{ item }}"
+    password: "{{ db_password }}"
+    priv: "{{ db_name }}.*:ALL"
+    plugin: mysql_native_password
+    update_password: on_create
+    state: present
+    login_user: root
+  loop: "{{ _drupal_grant_hosts }}"
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_grants]
 
 - name: Create GTID-aware dump on PRIMARY
   shell: >
