@@ -1,0 +1,4 @@
+---
+proxysql_monitor_password: "YOUR_SECURE_MONITOR_PASSWORD_HERE"
+proxysql_admin_user: "admin"
+proxysql_admin_pass: "YOUR_SECURE_ADMIN_PASSWORD_HERE"

@@ -68,6 +68,57 @@
     enabled: yes
   tags: [mysql, mysql_install, mysql_config]
 
+- name: (ProxySQL) Temporarily disable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: Create ProxySQL monitor user (on all DB hosts)
+  community.mysql.mysql_user:
+    name: "proxysql_monitor"
+    host: "10.%"
+    password: "{{ proxysql_monitor_password }}"
+    priv: "*.*:USAGE"
+    plugin: mysql_native_password
+    state: present
+    login_user: root
+  # This task must run on ALL database servers
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: Grant specific monitor privileges (on all DB hosts)
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      # Basic monitoring
+      - "GRANT SELECT ON performance_schema.threads TO 'proxysql_monitor'@'10.%'"
+      # For GTID replication monitoring
+      - "GRANT SELECT ON performance_schema.replication_group_members TO 'proxysql_monitor'@'10.%'"
+      - "GRANT SELECT ON performance_schema.replication_applier_status_by_worker TO 'proxysql_monitor'@'10.%'"
+      # For standard replication monitoring
+      - "GRANT SELECT ON mysql.slave_master_info TO 'proxysql_monitor'@'10.%'"
+      #
+      # NOTE: Removed 'GRANT SELECT ON information_schema.SCHEMATA'
+      # This causes 1044 errors on modern MySQL versions.
+      #
+      # To check read_only status
+      - "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'proxysql_monitor'@'10.%'"
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: (ProxySQL) Re-enable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
 - name: Create replication user (primary only)
   community.mysql.mysql_user:
     name: "repl"

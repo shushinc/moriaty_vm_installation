@@ -23,6 +23,14 @@
     - role: runtime
       tags: moriarty
 
+- name: Setup ProxySQL
+  hosts: runtime
+  become: true
+  gather_facts: true
+  roles:
+    - role: proxysql   
+  tags: proxysql
+
 - name: upgrade-db
   hosts: dbs
   become: true
