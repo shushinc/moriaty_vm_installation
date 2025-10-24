@@ -14,3 +14,12 @@ start_php_fpm: "/var/www/html/shushportal/scripts/start-php-fpm.sh"
 drupal_supervisor: "/etc/drupal_supervisor.conf"
 apigateway: "Kong"   #currently support only AWS, Kong only, if not set to  none
 
+# ProxySQL admin on the same host
+proxysql_admin_host: 127.0.0.1
+proxysql_admin_port: 6032
+proxysql_admin_user: "admin"
+use_proxysql: true
+
+# Local ProxySQL on every runtime host
+proxysql_host: 127.0.0.1
+proxysql_port: 6033

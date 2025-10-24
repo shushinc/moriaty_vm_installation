@@ -2,3 +2,12 @@
 proxysql_monitor_password: "YOUR_SECURE_MONITOR_PASSWORD_HERE"
 proxysql_admin_user: "admin"
 proxysql_admin_pass: "YOUR_SECURE_ADMIN_PASSWORD_HERE"
+# ProxySQL admin on the same host
+proxysql_admin_host: 127.0.0.1
+proxysql_admin_port: 6032
+proxysql_admin_user: "admin"
+use_proxysql: true
+
+# Local ProxySQL on every runtime host
+proxysql_host: 127.0.0.1
+proxysql_port: 6033

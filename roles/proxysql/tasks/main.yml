@@ -1,10 +1,10 @@
 ---
-- name: Add ProxySQL 2 repository (RHEL/CentOS)
+- name: Add ProxySQL 2.7 repository (RHEL/CentOS)
   yum_repository:
     name: proxysql-2
-    description: ProxySQL 2 Repository
-    baseurl: https://repo.proxysql.com/ProxySQL/proxysql-2.x/centos/$releasever
-    gpgkey: https://repo.proxysql.com/ProxySQL/proxysql-2.x/centos/$releasever/RPM-GPG-KEY-proxysql
+    description: ProxySQL 2.7 Repository
+    baseurl: https://repo.proxysql.com/ProxySQL/proxysql-2.7.x/centos/$releasever
+    gpgkey: https://repo.proxysql.com/ProxySQL/proxysql-2.7.x/repo_pub_key
     gpgcheck: yes
     enabled: yes
   when: ansible_os_family == "RedHat"
@@ -22,8 +22,8 @@
     src: proxysql.cnf.j2
     dest: /etc/proxysql.cnf
     owner: root
-    group: root
-    mode: '0600'
+    group: proxysql  
+    mode: '0640'     
   notify: Restart proxysql
 
 - name: Ensure ProxySQL service is enabled and started
@@ -52,36 +52,8 @@
       - "UPDATE global_variables SET variable_value='2000' WHERE variable_name='mysql-monitor_ping_interval';"
       - "UPDATE global_variables SET variable_value='1000' WHERE variable_name='mysql-monitor_connect_interval';"
       - "UPDATE global_variables SET variable_value='ON' WHERE variable_name='mysql-monitor_replication_lag_use_perfschema';"
-
-- name: Add Primary DB ({{ db_host_primary }}) to Hostgroup 10 (Writer)
-  community.mysql.mysql_query:
-    login_host: 127.0.0.1
-    login_port: 6032
-    login_user: "{{ proxysql_admin_user }}"
-    login_password: "{{ proxysql_admin_pass }}"
-    query:
-      - "DELETE FROM mysql_servers WHERE hostname='{{ db_host_primary }}';"
-      - "INSERT INTO mysql_servers (hostname, hostgroup_id, port, max_connections) VALUES ('{{ db_host_primary }}', 10, 3306, 200);"
-
-- name: Add Replica DB ({{ db_host_replica1 }}) to Hostgroup 20 (Reader)
-  community.mysql.mysql_query:
-    login_host: 127.0.0.1
-    login_port: 6032
-    login_user: "{{ proxysql_admin_user }}"
-    login_password: "{{ proxysql_admin_pass }}"
-    query:
-      - "DELETE FROM mysql_servers WHERE hostname='{{ db_host_replica1 }}';"
-      - "INSERT INTO mysql_servers (hostname, hostgroup_id, port, max_connections) VALUES ('{{ db_host_replica1 }}', 20, 3306, 200);"
-
-- name: Add Drupal user ({{ db_user }}) to ProxySQL
-  community.mysql.mysql_query:
-    login_host: 127.0.0.1
-    login_port: 6032
-    login_user: "{{ proxysql_admin_user }}"
-    login_password: "{{ proxysql_admin_pass }}"
-    query:
-      - "DELETE FROM mysql_users WHERE username='{{ db_user }}';"
-      - "INSERT INTO mysql_users (username, password, active, default_hostgroup) VALUES ('{{ db_user }}', '{{ db_password }}', 1, 10);"
+      - "UPDATE global_variables SET variable_value='1900' WHERE variable_name='mysql-monitor_ping_timeout';"
+      - "INSERT OR REPLACE INTO global_variables (variable_name, variable_value) VALUES ('mysql-monitor_replication_lag_max', '30');"      
 
 - name: Configure replication hostgroups for failover
   community.mysql.mysql_query:
@@ -91,7 +63,7 @@
     login_password: "{{ proxysql_admin_pass }}"
     query:
       - "DELETE FROM mysql_replication_hostgroups;"
-      - "INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment) VALUES (10, 20, 'Drupal Primary/Replica');"
+      - "INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (10, 20, 'read_only', 'Drupal Primary/Replica');"
 
 - name: Set basic read/write split query rules
   community.mysql.mysql_query:
@@ -106,6 +78,9 @@
       # Rule 2: Send other 'SELECT' to reader (HG 20)
       - "DELETE FROM mysql_query_rules WHERE rule_id=20;"
       - "INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (20, 1, '^SELECT .*', 20, 1);"
+      # Rule 21: If Rule 20 fails (HG 20 is empty), this rule will match and send to HG 10
+      - "DELETE FROM mysql_query_rules WHERE rule_id=21;"
+      - "INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (21, 1, '^SELECT .*', 10, 1);"
       # Rule 3: Send transactions to writer (HG 10)
       - "DELETE FROM mysql_query_rules WHERE rule_id=30;"
       - "INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (30, 1, '^BEGIN', 10, 1);"
@@ -126,3 +101,29 @@
       - "SAVE MYSQL USERS TO DISK;"
       - "LOAD MYSQL QUERY RULES TO RUNTIME;"
       - "SAVE MYSQL QUERY RULES TO DISK;"
+
+- name: Add Drupal user ({{ db_user }}) to ProxySQL
+  community.mysql.mysql_query:
+    login_host: 127.0.0.1
+    login_port: 6032
+    login_user: "{{ proxysql_admin_user }}"
+    login_password: "{{ proxysql_admin_pass }}"
+    query:
+      - "DELETE FROM mysql_users WHERE username='{{ db_user }}';"
+      - >-
+        INSERT INTO mysql_users (username,password,active,default_hostgroup,default_schema,use_ssl)
+        VALUES ('{{ db_user }}','{{ db_password }}',1,10,'{{ db_name }}',0);
+      - "LOAD MYSQL USERS TO RUNTIME;"
+      - "SAVE MYSQL USERS TO DISK;"
+
+- name: Ensure servers present
+  community.mysql.mysql_query:
+    login_host: 127.0.0.1
+    login_port: 6032
+    login_user: "{{ proxysql_admin_user }}"
+    login_password: "{{ proxysql_admin_pass }}"
+    query:
+      - "DELETE FROM mysql_servers WHERE hostname IN ('{{ db_host_primary }}','{{ db_host_replica1 }}');"
+      - "INSERT INTO mysql_servers (hostname,hostgroup_id,port,max_connections) VALUES ('{{ db_host_primary }}',10,3306,200);"
+      - "INSERT INTO mysql_servers (hostname,hostgroup_id,port,max_connections) VALUES ('{{ db_host_replica1 }}',20,3306,200);"
+  run_once: true

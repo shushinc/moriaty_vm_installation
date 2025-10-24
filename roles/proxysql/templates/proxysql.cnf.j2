@@ -1,0 +1,13 @@
+datadir="/var/lib/proxysql"
+
+admin_variables = {
+  admin_credentials="{{ proxysql_admin_user | default('admin') }}:{{ proxysql_admin_pass }}"
+  mysql_ifaces="127.0.0.1:6032"
+}
+
+mysql_variables = {
+  interfaces="0.0.0.0:6033;/var/lib/proxysql/mysql.sock"
+  default_schema="information_schema"
+  monitor_username="proxysql_monitor"
+  monitor_password="{{ proxysql_monitor_password | default('monitorpass') }}"
+}

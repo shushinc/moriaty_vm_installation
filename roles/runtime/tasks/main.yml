@@ -120,12 +120,6 @@
   args:
     executable: /bin/bash
 
-# ======================================================================
-# DB wiring for PRIMARY + REPLICA (from inventory variables)
-# inventory.yml provides:
-#   db_name, db_user, db_password
-#   db_host_primary, db_host_replica1
-# ======================================================================
 
 - name: Show DB variables from inventory (for visibility)
   debug:
@@ -150,9 +144,13 @@
     delay: 0
     timeout: 60
 
-# NOTE: We do not resolve db_host dynamically anymore.
-# We pass the PRIMARY + REPLICA hosts explicitly to the settings.php template
-# because settings.php.j2 expects db_host_primary and db_host_replica1.
+- name: Wait for local ProxySQL to be ready (if used)
+  wait_for:
+    host: 127.0.0.1
+    port: "{{ proxysql_port }}"
+    delay: 0
+    timeout: 30
+  when: use_proxysql | default(false)
 
 - name: Template PHP settings file (PRIMARY + REPLICA)
   template:

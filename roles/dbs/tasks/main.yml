@@ -36,9 +36,6 @@
       innodb_flush_log_at_trx_commit = 1
       sync_binlog = 1
       {% else %}
-      # REPLICA
-      read_only = ON
-      super_read_only = ON
       relay_log = relay-bin
       log_bin = mysql-bin
       {% endif %}
@@ -133,19 +130,6 @@
   tags: [mysql, mysql_primary_init]
 
 
-- name: Create replication user (primary only)
-  community.mysql.mysql_user:
-    name: "repl"
-    host: "10.%"
-    password: "{{ repl_password }}"
-    priv: "*.*:REPLICATION SLAVE"
-    plugin: mysql_native_password
-    update_password: on_create
-    state: present
-    login_user: root
-  when: inventory_hostname in groups['db_primary']
-  tags: [mysql, mysql_primary_init]
-
 - name: Copy external Drupal dump to PRIMARY
   copy:
     src: "{{ role_path }}/templates/zcs_new.sql.gz"
@@ -180,7 +164,8 @@
         | select('defined')
         | list
       }}
-  when: inventory_hostname in groups['db_primary']
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
 
 - name: Build host grant list for Drupal user
   set_fact:
@@ -189,7 +174,17 @@
         (['%','10.%'] + (_web_ips | default([])))
         | unique
       }}
-  when: inventory_hostname in groups['db_primary']
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
+
+- name: (Drupal User) Temporarily disable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
 
 - name: Ensure Drupal user can connect from all allowed hosts
   community.mysql.mysql_user:
@@ -202,9 +197,18 @@
     state: present
     login_user: root
   loop: "{{ _drupal_grant_hosts }}"
-  when: inventory_hostname in groups['db_primary']
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants]
 
+- name: (Drupal User) Re-enable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
+  
 - name: Create GTID-aware dump on PRIMARY
   shell: >
     mysqldump --single-transaction --quick --routines --triggers

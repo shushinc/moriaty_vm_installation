@@ -40,6 +40,7 @@ vi roles/runtime/tasks/main.yml ( Line Number 122)
 ```bash
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags base
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql --private-key ~/.ssh/id_rsa_ansible
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags proxysql --private-key ~/.ssh/id_rsa_ansible
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags moriarty --private-key ~/.ssh/id_rsa_ansible
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags metabase --private-key ~/.ssh/id_rsa_ansible
 
