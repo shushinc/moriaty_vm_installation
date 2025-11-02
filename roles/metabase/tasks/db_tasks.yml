@@ -185,14 +185,7 @@
     executable: /bin/bash
   when: inventory_hostname in groups['db_primary']
 
-# - name: Ensure a local cache dir exists on controller
-#   ansible.builtin.file:
-#     path: "{{ mb_seed_local | dirname }}"
-#     state: directory
-#     mode: "0755"
-#   delegate_to: localhost
-#   when: inventory_hostname in groups['db_primary']
-
+# Fetch seed to controller
 - name: Fetch seed dump to controller (/tmp)
   ansible.builtin.fetch:
     src: /tmp/seed.sql.gz
@@ -200,14 +193,13 @@
     flat: true
   when: inventory_hostname in groups['db_primary']
 
-# Optional: sanity check on controller
+# Sanity check on controller
 - name: Verify seed file is on controller (/tmp)
   ansible.builtin.stat:
     path: "{{ mb_seed_local }}"
   register: _mb_seed_local
   delegate_to: localhost
   when: inventory_hostname in groups['db_primary']
-
 
 - name: Fail if local seed file is missing
   ansible.builtin.fail:
@@ -216,6 +208,15 @@
     - inventory_hostname in groups['db_primary']
     - not _mb_seed_local.stat.exists
 
+# cleanup old seed file on replicas
+- name: Remove any previously existing Metabase seed files on REPLICAS
+  ansible.builtin.file:
+    path: /tmp/seed.sql.gz
+    state: absent
+  when: inventory_hostname in groups['db_replicas']
+  tags: [metabase_seed]
+
+# Now copy to replicas
 - name: Push seed dump to REPLICAS
   ansible.builtin.copy:
     src: "{{ mb_seed_local }}"
