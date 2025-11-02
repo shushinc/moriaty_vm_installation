@@ -3,7 +3,7 @@
   set_fact:
     repl_user: "{{ repl_user | default('repl') }}"
     repl_password: "{{ repl_password | default('changeme') }}"
-    metabase_db_name: "{{ metabase_db_name | default('metabase') }}"
+    metabase_db_name: "{{ metabase_db_name | default('metabase_db') }}"
     metabase_db_user: "{{ metabase_db_user | default('devportal') }}"
     metabase_db_password: "{{ metabase_db_password | default('pass') }}"
     metabase_app_hosts: "{{ metabase_app_hosts | default(['%','10.%']) }}"
@@ -191,6 +191,14 @@
 # SECTION 5: Snapshot Primary & Seed Replicas (GTID Method)
 # This logic is copied directly from your Drupal playbook.
 # -----------------------------------------------------------------
+# cleanup old seed file on replicas
+- name: Remove any previously existing Metabase seed files on REPLICAS
+  ansible.builtin.file:
+    path: /tmp/seed.sql.gz
+    state: absent
+  when: inventory_hostname in groups['db_replicas']
+  tags: [metabase_seed]
+
 - name: Create GTID-aware dump on PRIMARY
   ansible.builtin.shell: >
     mysqldump --single-transaction --quick --routines --triggers
@@ -223,13 +231,6 @@
     - inventory_hostname in groups['db_primary']
     - not _mb_seed_local.stat.exists
 
-# cleanup old seed file on replicas
-- name: Remove any previously existing Metabase seed files on REPLICAS
-  ansible.builtin.file:
-    path: /tmp/seed.sql.gz
-    state: absent
-  when: inventory_hostname in groups['db_replicas']
-  tags: [metabase_seed]
 
 # Now copy to replicas
 - name: Push seed dump to REPLICAS
@@ -243,7 +244,7 @@
   community.mysql.mysql_replication:
     mode: stopreplica
     login_user: root
-  ignore_errors: yes
+  # ignore_errors: yes
   when: inventory_hostname in groups['db_replicas']
 
 - name: RESET REPLICA ALL and RESET MASTER (force clean GTIDs)

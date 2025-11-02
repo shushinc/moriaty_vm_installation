@@ -19,8 +19,8 @@ moriarty:
 
     dbs:
       children:
-        db_primary: 10.128.0.3
-        db_replicas: 10.128.0.52
+        db_primary: 
+        db_replicas: 
 
     runtime:
       hosts:
@@ -41,7 +41,7 @@ moriarty:
     db_name: "moriaty"
     db_user: "devportal"
     db_password: "pass"
-    metabase_db_name: "metabase"
+    # metabase_db_name: "metabase"
 
     repl_password: "pass"
 
