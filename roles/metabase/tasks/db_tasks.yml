@@ -156,6 +156,17 @@
     primary_db_ip: "{{ hostvars[groups['db_primary'][0]].ansible_host | default(groups['db_primary'][0]) }}"
   when: inventory_hostname in groups['db_primary']
 
+# --- Ensure Metabase schema exists before touching it (PRIMARY) ---
+- name: Check if metabase_database table exists (PRIMARY)
+  community.mysql.mysql_query:
+    query: "SELECT COUNT(*) AS c
+            FROM information_schema.tables
+            WHERE table_schema='{{ metabase_db_name }}'
+              AND table_name='metabase_database';"
+  register: mb_table_check
+  when: inventory_hostname in groups['db_primary']
+
+# --- Now safe to update the saved connection ONLY if table exists ---
 - name: Fix Metabase's internal connection to its OWN db (primary only)
   community.mysql.mysql_query:
     login_user: root
@@ -169,8 +180,12 @@
         '$.password', '{{ metabase_db_password }}'
       )
       WHERE name = 'metabase';
-  when: inventory_hostname in groups['db_primary']
-  # Add more queries here if you need to fix other connections (like 'moriarty')
+  when:
+    - inventory_hostname in groups['db_primary']
+    - (mb_table_check.query_result | length > 0)
+    - (mb_table_check.query_result[0] | length > 0)
+    - (mb_table_check.query_result[0][0].c | int) > 0
+
 
 # -----------------------------------------------------------------
 # SECTION 5: Snapshot Primary & Seed Replicas (GTID Method)
