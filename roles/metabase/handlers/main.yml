@@ -1,0 +1,5 @@
+- name: Restart MySQL
+  listen: Restart MySQL
+  service:
+    name: mysqld     # EL9/CentOS Stream 9 uses 'mysqld'
+    state: restarted
