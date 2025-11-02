@@ -1,130 +1,315 @@
 ---
-- name: Update the package index on RHEL
-  dnf:
-    name: "*"
-    state: latest
-    update_cache: yes
-
-- name: Install PHP and extensions on RHEL
-  dnf:
-    name:
-      - php
-      - php-cli
-      - php-fpm
-      - php-gd
-      - php-mysqlnd
-      - php-mbstring
-      - php-json
-      - php-common
-      - php-dba
-      - php-dbg
-      - php-devel
-      - php-bcmath
-      - php-intl
-      - php-ldap
-      - php-opcache
-      - php-pear
+- name: (SELinux) ensure tools present
+  package:
+    name: policycoreutils-python-utils
     state: present
-    update_cache: yes
-- name: Enable EPEL repository
-  dnf:
-    name: epel-release
-    state: present
-
-- name: Install Python 3
-  dnf:
-    name: python3
-    state: present
-
-- name: Install Python MySQL module
-  dnf:
-    name: python3-mysqlclient  # Change to the appropriate package if needed
-    state: present
-
-- name: Install pip for Python 3
-  dnf:
-    name: python3-pip
-    state: present
-
-# (Optional) PHP bits are not needed on a DB VM; remove if this is DB-only
-- name: Install Python + tooling
-  dnf:
-    name:
-      - epel-release
-      - python3
-      - python3-pip
-      - python3-PyMySQL        # driver Ansible uses
-      # - python3-mysqlclient  # not required by Ansible; PyMySQL is enough
-    state: present
-
+  when: ansible_os_family == "RedHat"
+  tags: [mysql, mysql_install]
 
 - name: Install MySQL server
   dnf:
     name: mysql-server
     state: present
     update_cache: yes
+  tags: [mysql, mysql_install]
+
+- name: Write /etc/my.cnf.d/server.cnf (GTID + ROW, per-role differences)
+  copy:
+    dest: /etc/my.cnf.d/server.cnf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      {% set sid = (((inventory_hostname | hash('sha1'))[0:8] | int(base=16)) % 4294967294) + 1 %}
+      [mysqld]
+      server-id = {{ sid }}
+      binlog_format = ROW
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      log_replica_updates = ON
+      binlog_expire_logs_seconds = 2592000
+      binlog_row_image = FULL
+
+      {% if inventory_hostname in groups['db_primary'] %}
+      # PRIMARY
+      log_bin = mysql-bin
+      innodb_flush_log_at_trx_commit = 1
+      sync_binlog = 1
+      {% else %}
+      relay_log = relay-bin
+      log_bin = mysql-bin
+      {% endif %}
+  notify: Restart MySQL
+  tags: [mysql, mysql_config]
+
+- name: Ensure MySQL data dir exists and owned by mysql
+  file:
+    path: /var/lib/mysql
+    state: directory
+    owner: mysql
+    group: mysql
+    mode: '0700'
+  tags: [mysql, mysql_install]
+
+- name: Restore SELinux contexts on MySQL paths
+  command: restorecon -Rv /var/lib/mysql /etc/my.cnf /etc/my.cnf.d
+  changed_when: false
+  failed_when: false
+  when: ansible_os_family == "RedHat"
+  tags: [mysql, mysql_install]
 
 - name: Ensure MySQL service is enabled and running
   service:
     name: mysqld
     state: started
     enabled: yes
+  tags: [mysql, mysql_install, mysql_config]
 
-- name: Copy gzipped SQL dump to server (src is absolute path on controller)
+- name: (ProxySQL) Temporarily disable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: Create ProxySQL monitor user (on all DB hosts)
+  community.mysql.mysql_user:
+    name: "proxysql_monitor"
+    host: "10.%"
+    password: "{{ proxysql_monitor_password }}"
+    priv: "*.*:USAGE"
+    plugin: mysql_native_password
+    state: present
+    login_user: root
+  # This task must run on ALL database servers
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: Grant specific monitor privileges (on all DB hosts)
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      # Basic monitoring
+      - "GRANT SELECT ON performance_schema.threads TO 'proxysql_monitor'@'10.%'"
+      # For GTID replication monitoring
+      - "GRANT SELECT ON performance_schema.replication_group_members TO 'proxysql_monitor'@'10.%'"
+      - "GRANT SELECT ON performance_schema.replication_applier_status_by_worker TO 'proxysql_monitor'@'10.%'"
+      # For standard replication monitoring
+      - "GRANT SELECT ON mysql.slave_master_info TO 'proxysql_monitor'@'10.%'"
+      #
+      # NOTE: Removed 'GRANT SELECT ON information_schema.SCHEMATA'
+      # This causes 1044 errors on modern MySQL versions.
+      #
+      # To check read_only status
+      - "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'proxysql_monitor'@'10.%'"
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: (ProxySQL) Re-enable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants, proxysql]
+
+- name: Create replication user (primary only)
+  community.mysql.mysql_user:
+    name: "repl"
+    host: "10.%"
+    password: "{{ repl_password }}"
+    priv: "*.*:REPLICATION SLAVE"
+    plugin: mysql_native_password
+    update_password: on_create
+    state: present
+    login_user: root
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_primary_init]
+
+
+- name: Copy external Drupal dump to PRIMARY
   copy:
     src: "{{ role_path }}/templates/zcs_new.sql.gz"
-    dest: "{{ sql_file_path }}.gz"
+    dest: /tmp/zcs_new.sql.gz
     mode: '0644'
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed_external]
 
-- name: Unzip SQL file on server
-  shell: gzip -d -f {{ sql_file_path }}.gz
-  args:
-    chdir: /
+- name: Ensure plain SQL exists on PRIMARY (gunzip)
+  shell: gunzip -c /tmp/zcs_new.sql.gz > /tmp/zcs_new.sql
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed_external]
 
-
-- name: Create MySQL database
-  mysql_db:
-    login_user: root
+- name: Import external dump into PRIMARY
+  community.mysql.mysql_db:
     name: "{{ db_name }}"
-    state: present
-
-- name: Create MySQL user with access to the database
-  mysql_user:
+    state: import
+    target: /tmp/zcs_new.sql
     login_user: root
-    name: "{{ db_user }}"
-    password: "{{ db_password }}"
-    priv: "{{ db_name }}.*:ALL"
-    state: present
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed_external]
 
-- name: Allow {{ db_user }} from localhost
+
+# give moriarty user grants
+
+- name: Collect web node IPs from 'runtime' group
+  set_fact:
+    _web_ips: >-
+      {{
+        groups.get('runtime', [])
+        | map('extract', hostvars, 'ansible_host')
+        | select('defined')
+        | list
+      }}
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
+
+- name: Build host grant list for Drupal user
+  set_fact:
+    _drupal_grant_hosts: >-
+      {{
+        (['%','10.%'] + (_web_ips | default([])))
+        | unique
+      }}
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
+
+- name: (Drupal User) Temporarily disable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
+
+- name: Ensure Drupal user can connect from all allowed hosts
   community.mysql.mysql_user:
     name: "{{ db_user }}"
-    host: "localhost"
+    host: "{{ item }}"
     password: "{{ db_password }}"
-    plugin: mysql_native_password   # FIX: was auth_plugin
-    update_password: always
     priv: "{{ db_name }}.*:ALL"
-    state: present
-    login_user: root
-    check_implicit_admin: true
-
-# Grant from each inventory host (IP) — tighter than '%'
-- name: Allow {{ db_user }} from each inventory host
-  community.mysql.mysql_user:
-    name: "{{ db_user }}"
-    host: "{{ hostvars[item].ansible_host | default(item) }}"
-    password: "{{ db_password }}"
     plugin: mysql_native_password
-    update_password: always
-    priv: "{{ db_name }}.*:ALL"
+    update_password: on_create
     state: present
     login_user: root
-    check_implicit_admin: true
-  loop: "{{ groups['all'] | difference(['localhost']) }}"
+  loop: "{{ _drupal_grant_hosts }}"
+  when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
 
-
-- name: Import SQL file into MySQL database
+- name: (Drupal User) Re-enable read_only on REPLICAS
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_grants]
+  
+- name: Create GTID-aware dump on PRIMARY
   shell: >
-    mysql -u root {{ db_name }} < {{ sql_file_path }}
-  args:
-    chdir: /
+    mysqldump --single-transaction --quick --routines --triggers
+    --master-data=2 --set-gtid-purged=ON
+    --databases {{ db_name }} | gzip > /tmp/seed.sql.gz
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed]
+
+- name: Fetch seed dump to controller
+  fetch:
+    src: /tmp/seed.sql.gz
+    dest: "/tmp/mysql-seed.sql.gz"
+    flat: yes
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_seed]
+
+- name: Push seed dump to REPLICAS
+  copy:
+    src: "/tmp/mysql-seed.sql.gz"
+    dest: /tmp/seed.sql.gz
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: STOP REPLICA on replicas (ignore if clean)
+  community.mysql.mysql_replication:
+    mode: stopreplica
+    login_user: root
+  ignore_errors: yes
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: RESET REPLICA ALL and RESET MASTER (force clean GTIDs)
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "RESET REPLICA ALL"
+      - "RESET MASTER"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: Disable read_only/super_read_only on REPLICAS for initial import
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: Ensure plain SQL exists on REPLICAS
+  shell: gunzip -c /tmp/seed.sql.gz > /tmp/seed.sql
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: Import plain SQL on REPLICAS (applies SET @@GLOBAL.GTID_PURGED)
+  community.mysql.mysql_db:
+    name: "{{ db_name }}"
+    state: import
+    target: /tmp/seed.sql
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: Re-enable read_only/super_read_only on REPLICAS after import
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_seed]
+
+- name: CHANGE PRIMARY (GTID) on replicas
+  community.mysql.mysql_replication:
+    mode: changeprimary
+    master_host: "{{ hostvars[groups['db_primary'][0]].ansible_host | default(groups['db_primary'][0]) }}"
+    master_user: "repl"
+    master_password: "{{ repl_password }}"
+    master_port: 3306
+    master_auto_position: yes
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_replication]
+
+- name: START REPLICA on replicas
+  community.mysql.mysql_replication:
+    mode: startreplica
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_replication]
+
+- name: Get replication status (replicas)
+  community.mysql.mysql_replication:
+    mode: getreplica
+    login_user: root
+  register: repl_status
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_check]
+
+- name: Show replication summary (replicas)
+  debug:
+    var: repl_status
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_check]

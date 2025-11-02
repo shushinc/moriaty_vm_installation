@@ -1,2 +1,3 @@
 ---
 sql_file_path: "/tmp/zcs_new.sql"  # Path to the SQL file
+proxysql_monitor_password: "YOUR_SECURE_MONITOR_PASSWORD_HERE"
