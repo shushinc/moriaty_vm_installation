@@ -1,4 +1,12 @@
 ---
+- name: Common base packages and Python tooling
+  hosts: moriarty
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+      tags: base
+      
 - name: Setup Mysql DB
   hosts: dbs
   become: true
