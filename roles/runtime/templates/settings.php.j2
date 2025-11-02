@@ -1,16 +1,48 @@
 <?php
 
-$databases['default']['default'] = array (
+{% if use_proxysql | default(false) %}
+
+
+$databases['default']['default'] = [
   'database' => "{{ db_name }}",
   'username' => "{{ db_user }}",
   'password' => "{{ db_password }}",
   'prefix' => '',
-  'host' => "{{ db_host }}",
+  'host' => "127.0.0.1",
+  'port' => "{{ proxysql_port }}",
+  'driver' => 'mysql',
+  'namespace' => 'Drupal\\mysql\\Driver\\Database\\mysql',
+  'autoload' => 'core/modules/mysql/src/Driver/Database/mysql/',
+];
+
+{% else %}
+
+$databases['default']['default'] = [
+  'database' => "{{ db_name }}",
+  'username' => "{{ db_user }}",
+  'password' => "{{ db_password }}",
+  'prefix' => '',
+  'host' => "{{ db_host_primary }}",
   'port' => '3306',
   'driver' => 'mysql',
   'namespace' => 'Drupal\\mysql\\Driver\\Database\\mysql',
   'autoload' => 'core/modules/mysql/src/Driver/Database/mysql/',
-);
+];
+
+// Read replica(s)
+$databases['default']['replica'][] = [
+  'database' => "{{ db_name }}",
+  'username' => "{{ db_user }}",
+  'password' => "{{ db_password }}",
+  'prefix' => '',
+  'host' => "{{ db_host_replica1 }}",
+  'port' => '3306',
+  'driver' => 'mysql',
+  'namespace' => 'Drupal\\mysql\\Driver\\Database\\mysql',
+  'autoload' => 'core/modules/mysql/src/Driver/Database/mysql/',
+];
+{% endif %}
+
 
 
 // $settings['config_sync_directory'] = '/var/www/html/shushportal/web/sites/default/files/config';
