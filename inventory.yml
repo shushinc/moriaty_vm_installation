@@ -1,21 +1,61 @@
 ---
 moriarty:
   children:
-    dbs:
+
+    # --- Database topology ---
+    db_primary:
       hosts:
-        10.211.139.58:
-          db_host: "10.211.139.58" 
-          db_name: "moriaty"
-          db_user: "devportal"
-          db_password: "pass"
-          metabase_db_name: "metabase_db"
+        db-primary:
+          ansible_host: 10.128.0.3
+          server_id: 1
+          db_host: "10.128.0.3"
+
+    db_replicas:
+      hosts:
+        db-replica-1:
+          ansible_host: 10.128.0.52 
+          server_id: 2
+          db_host: "10.128.0.52"
+
+    dbs:
+      children:
+        db_primary: 
+        db_replicas: 
+
     runtime:
       hosts:
-        10.211.139.56:
-        10.211.139.57:
+        web-1:
+          ansible_host: 10.128.15.242
+        web-2:
+          ansible_host: 10.128.0.128
+        web-3:
+          ansible_host: 10.128.0.129
 
-  # Required Vars
+  # --- Shared vars ---
   vars:
     ansible_port: 22
     ansible_user: ansible
-    drush_target_host: 10.211.139.56
+
+    drush_target_host: 10.128.15.242
+
+    db_name: "moriaty"
+    db_user: "devportal"
+    db_password: "pass"
+      #metabase_db_name: "metabase"
+
+    repl_password: "pass"
+
+    # Convenience vars for settings.php template
+    db_host_primary:  "10.128.0.3"
+    db_host_replica1: "10.128.0.52"
+
+    # # Toggle: route moriarty  through ProxySQL
+    # use_proxysql: true
+
+    # # ProxySQL (listener & admin)
+    # proxysql_host: 10.128.0.76          
+    # proxysql_port: 6033                 
+    # proxysql_admin_host: 127.0.0.1
+    # proxysql_admin_port: 6032
+    # proxysql_admin_user: admin
+    # proxysql_admin_password: "YOUR_SECURE_ADMIN_PASSWORD_HERE"

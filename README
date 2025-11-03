@@ -38,6 +38,7 @@ vi roles/runtime/tasks/main.yml ( Line Number 122)
 3. In the root directory, run the Ansible playbook to provision the cluster:
 
 ```bash
+ansible-playbook playbook/sites.yaml -i inventory.yml --tags base
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags mysql
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags moriarty
 ansible-playbook playbook/sites.yaml -i inventory.yml --tags metabase

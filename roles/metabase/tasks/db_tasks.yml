@@ -1,192 +1,295 @@
+# FILE: db_tasks.yml
 ---
-- name: Ensure MySQL Python driver is present
-  package:
-    name: python3-PyMySQL
-    state: present
+# ==============================================================================
+# SECTION 1: DEFAULT VARS
+# ==============================================================================
 
-- name: Ensure MySQL service is started and enabled
-  service:
+- name: Set defaults for Metabase + replication vars
+  set_fact:
+    repl_user: "{{ repl_user | default('repl') }}"
+    repl_password: "{{ repl_password | default('changeme') }}"
+    metabase_db_name: "{{ metabase_db_name | default('metabase_db') }}"
+    metabase_db_user: "{{ metabase_db_user | default('devportal') }}"
+    metabase_db_password: "{{ metabase_db_password | default('pass') }}"
+    metabase_app_hosts: "{{ metabase_app_hosts | default(['%','10.%']) }}"
+    metabase_sql_dump_filename: "{{ metabase_sql_dump_filename | default('metabase_db.sql.gz') }}"
+    mb_seed_local: "/tmp/metabase-seed-{{ metabase_db_name }}.sql.gz"
+    sql_zip_path: "/tmp/metabase_db.sql.zip"
+    sql_seed_dump_path: "/tmp/seed.sql.gz"
+    sql_extract_dir: "/tmp"
+    sql_extract_file: "/tmp/metabase_db.sql"
+    controller_seed_dump_path: "/tmp/metabase-seed-{{ metabase_db_name }}.sql.gz"
+
+
+# ==============================================================================
+# SECTION 2: INSTALLATION & CONFIG (ALL DB NODES)
+# ==============================================================================
+
+- name: (SELinux) ensure tools present
+  ansible.builtin.package:
+    name: policycoreutils-python-utils
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Install MySQL server and dependencies
+  ansible.builtin.dnf:
+    name:
+      - mysql-server
+      - python3-PyMySQL
+      - unzip  # Needed to extract the .zip dump
+    state: present
+    update_cache: yes
+
+- name: Write /etc/my.cnf.d/server.cnf (GTID + ROW, per-role differences)
+  ansible.builtin.copy:
+    dest: /etc/my.cnf.d/server.cnf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      {% set sid = (((inventory_hostname | hash('sha1'))[0:8] | int(base=16)) % 4294967294) + 1 %}
+      [mysqld]
+      server-id = {{ server_id | default(sid) }}
+      binlog_format = ROW
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      log_replica_updates = ON
+      binlog_expire_logs_seconds = 2592000
+      binlog_row_image = FULL
+
+      {% if inventory_hostname in groups['db_primary'] %}
+      # PRIMARY
+      log_bin = mysql-bin
+      innodb_flush_log_at_trx_commit = 1
+      sync_binlog = 1
+      {% else %}
+      # REPLICA
+      read_only = ON
+      super_read_only = ON
+      relay_log = relay-bin
+      log_bin = mysql-bin
+      {% endif %}
+  register: mysql_config_change
+
+- name: Ensure MySQL data dir exists and owned by mysql
+  ansible.builtin.file:
+    path: /var/lib/mysql
+    state: directory
+    owner: mysql
+    group: mysql
+    mode: '0700'
+
+- name: Restore SELinux contexts on MySQL paths
+  ansible.builtin.command: restorecon -Rv /var/lib/mysql /etc/my.cnf /etc/my.cnf.d
+  changed_when: false
+  failed_when: false
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure MySQL service is enabled and running
+  ansible.builtin.service:
     name: mysqld
     state: started
     enabled: yes
 
-# NEW: unzip is required to extract the SQL from the zip archive
-- name: Ensure unzip is installed
-  package:
-    name: unzip
-    state: present
+- name: Restart mysqld if config changed
+  ansible.builtin.service:
+    name: mysqld
+    state: restarted
+  when: mysql_config_change.changed
 
-- name: Resolve Metabase DB connection from dbs group
-  set_fact:
-    mb_db_name:  "{{ hostvars[groups['dbs'][0]].metabase_db_name | default(hostvars[groups['dbs'][0]].metabase_db_name) }}"
-    mb_db_user:  "{{ hostvars[groups['dbs'][0]].metabase_db_user | default(hostvars[groups['dbs'][0]].db_user) }}"
-    mb_db_pass:  "{{ hostvars[groups['dbs'][0]].metabase_db_password | default(hostvars[groups['dbs'][0]].db_password) }}"
+# ==============================================================================
+# SECTION 3: INITIALIZE PRIMARY (PRIMARY ONLY)
+# ==============================================================================
 
-- name: Show resolved Metabase DB connection values
-  debug:
-    msg:
-      - "Metabase DB Name: {{ mb_db_name }}"
-      - "Metabase DB User: {{ mb_db_user }}"
-      - "Metabase DB Pass: {{ mb_db_pass }}"
-
-- name: Check if Metabase DB exists
-  community.mysql.mysql_query:
-    query: "SHOW DATABASES LIKE '{{ mb_db_name }}';"
-    login_user: root
-  register: mb_db_check
-
-- name: Show DB check result
-  debug:
-    var: mb_db_check.query_result
-
-- name: Create Metabase database if missing
-  community.mysql.mysql_db:
-    name: "{{ mb_db_name }}"
-    state: present
-    login_user: root
-  when: mb_db_check.query_result | length == 0 or (mb_db_check.query_result[0] | length == 0)
-
-- name: Check if Metabase DB exists after DB creation
-  community.mysql.mysql_query:
-    query: "SHOW DATABASES LIKE '{{ mb_db_name }}';"
-    login_user: root
-  register: mb_db_check
-
-- name: Show DB check result after DB creation
-  debug:
-    var: mb_db_check.query_result
-
-- name: Ensure Metabase user for localhost
+- name: Create replication user (primary only)
   community.mysql.mysql_user:
-    name: "{{ mb_db_user }}"
-    password: "{{ mb_db_pass }}"
-    host: "localhost"
-    priv: "{{ mb_db_name }}.*:ALL"
-    plugin: "mysql_native_password"
-    append_privs: true
-    state: present
-    login_user: root
-
-- name: Ensure Metabase user for any host (%)
-  community.mysql.mysql_user:
-    name: "{{ mb_db_user }}"
-    password: "{{ mb_db_pass }}"
+    name: "{{ repl_user }}"
     host: "%"
-    priv: "{{ mb_db_name }}.*:ALL"
-    append_privs: true
+    password: "{{ repl_password }}"
+    priv: "*.*:REPLICATION SLAVE"
+    plugin: mysql_native_password
+    update_password: on_create
     state: present
     login_user: root
+  when: inventory_hostname in groups['db_primary']
 
-# === Changed section starts here ===
-
-- name: Copy zipped SQL dump to destination server
-  copy:
-    src: "{{ role_path }}/templates/metabase_db.sql.zip"
-    dest: "{{ sql_zip_path | default('/tmp/metabase_db.sql.zip') }}"
-    mode: '0644'
-
-# Extract into /tmp (idempotent if the .sql already exists)
-- name: Unzip SQL dump
-  ansible.builtin.unarchive:
-    src: "{{ sql_zip_path | default('/tmp/metabase_db.sql.zip') }}"
-    dest: "{{ sql_extract_dir | default('/tmp') }}"
-    remote_src: true
-    creates: "{{ sql_extract_dir | default('/tmp') }}/metabase_db.sql"
-
-# If the archive layout is different, find the actual .sql file
-- name: Find unzipped SQL file
-  ansible.builtin.find:
-    paths: "{{ sql_extract_dir | default('/tmp') }}"
-    patterns: "metabase_db.sql"
-    file_type: file
-  register: found_sql
-
-- name: Fail if SQL file not found after unzip
-  ansible.builtin.assert:
-    that:
-      - found_sql.files | length > 0
-    fail_msg: "metabase_db.sql not found after unarchive. Check archive contents."
-
-- name: Import SQL dump into {{ mb_db_name }}
+- name: Create Metabase database (primary only)
   community.mysql.mysql_db:
-    name: "{{ mb_db_name }}"
-    state: import
-    target: "{{ found_sql.files[0].path }}"
+    name: "{{ metabase_db_name }}"
+    state: present
     login_user: root
+  when: inventory_hostname in groups['db_primary']
 
-# (Optional) clean up the uploaded zip
-# - name: Remove uploaded zip
-#   file:
-#     path: "{{ sql_zip_path | default('/tmp/metabase_db.sql.zip') }}"
-#     state: absent
-
-
-- name: Fix ONLY the Metabase app DB connection (do not touch Drupal)
+- name: Check if metabase_database table exists (PRIMARY)
   community.mysql.mysql_query:
-    login_host: "{{ MB_DB_HOST }}"
-    login_port: "{{ MB_DB_PORT | int }}"
-    login_user: "{{ MB_DB_USER }}"
-    login_password: "{{ MB_DB_PASS }}"
-    login_db: "{{ MB_DB_DBNAME }}"
+    login_user: root
+    query: "SELECT COUNT(1) as c FROM information_schema.tables WHERE table_schema = '{{ metabase_db_name }}' AND table_name = 'metabase_database';"
+  register: mb_table_check
+  when: inventory_hostname in groups['db_primary']
+
+- name: Ensure Metabase user (primary only)
+  community.mysql.mysql_user:
+    name: "{{ metabase_db_user }}"
+    host: "%"
+    password: "{{ metabase_db_password }}"
+    priv: "{{ metabase_db_name }}.*:ALL"
+    plugin: mysql_native_password
+    update_password: on_create
+    state: present
+    login_user: root
+  when: inventory_hostname in groups['db_primary']
+
+- name: Copy Metabase SQL dump (ZIP) to PRIMARY
+  ansible.builtin.copy:
+    src: "{{ role_path }}/templates/metabase_db.sql.zip"
+    dest: "{{ sql_zip_path }}"
+    mode: "0644"
+  when:
+    - inventory_hostname in groups['db_primary']
+    - (mb_table_check.query_result[0][0].c | int) == 0
+
+- name:  Unzip Metabase dump on PRIMARY
+  ansible.builtin.unarchive:
+    src: "{{ sql_zip_path }}"
+    dest: "{{ sql_extract_dir }}"
+    remote_src: true
+    creates: "{{ sql_extract_file }}"
+  when:
+    - inventory_hostname in groups['db_primary']
+    - (mb_table_check.query_result[0][0].c | int) == 0
+
+- name: Import Metabase dump into PRIMARY
+  community.mysql.mysql_db:
+    name: "{{ metabase_db_name }}"
+    state: import
+    target: "{{ sql_extract_file }}"
+    login_user: root
+  when:
+    - inventory_hostname in groups['db_primary']
+    - (mb_table_check.query_result[0][0].c | int) == 0
+
+- name: Fix Metabase's internal connection to its OWN db (primary only)
+  community.mysql.mysql_query:
+    login_user: root
     query: >
-      UPDATE metabase_database
-      SET details = JSON_SET(
+      UPDATE {{ metabase_db_name }}.metabase_database SET details = JSON_SET(
         details,
-        '$.host',     '{{ MB_DB_HOST }}',
-        '$.port',     CAST({{ MB_DB_PORT | int }} AS UNSIGNED),
-        '$.dbname',   '{{ MB_DB_DBNAME }}',
-        '$.user',     '{{ MB_DB_USER }}',
-        '$.password', '{{ MB_DB_PASS }}'
-      )
-      WHERE name = 'metabase'
-         OR JSON_EXTRACT(details,'$.dbname') = JSON_QUOTE('{{ MB_DB_DBNAME }}');
+        '$.host',     '{{ db_host_primary }}',
+        '$.user',     '{{ metabase_db_user }}',
+        '$.password', '{{ metabase_db_password }}'
+      ) WHERE name = 'metabase';
+  when:
+    - inventory_hostname in groups['db_primary']
+    - (mb_table_check.query_result[0][0].c | int) > 0  # Only run if table exists
 
+# ==============================================================================
+# SECTION 4: SEED REPLICAS (ALL DB NODES)
+# ==============================================================================
 
-- name: Keep Drupal (moriarty) source pointed to the right DB/user (no-op if already correct)
+- name: Create GTID-aware dump on PRIMARY
+  ansible.builtin.shell: >
+    mysqldump --single-transaction --quick --routines --triggers
+    --master-data=2 --set-gtid-purged=ON
+    --databases {{ metabase_db_name }} | gzip > {{ sql_seed_dump_path }}
+  when: inventory_hostname in groups['db_primary']
+
+- name: Fetch seed dump to controller
+  ansible.builtin.fetch:
+    src: "{{ sql_seed_dump_path }}"
+    dest: "{{ controller_seed_dump_path }}"
+    flat: yes
+  when: inventory_hostname in groups['db_primary']
+
+- name: Push seed dump to REPLICAS
+  ansible.builtin.copy:
+    src: "{{ controller_seed_dump_path }}"
+    dest: "{{ sql_seed_dump_path }}"
+  when: inventory_hostname in groups['db_replicas']
+
+- name: STOP REPLICA on replicas (ignore if clean)
+  community.mysql.mysql_replication:
+    mode: stopreplica
+    login_user: root
+  ignore_errors: yes
+  when: inventory_hostname in groups['db_replicas']
+
+- name: RESET REPLICA ALL and RESET MASTER (force clean GTIDs)
   community.mysql.mysql_query:
-    login_host: "{{ MB_DB_HOST }}"
-    login_port: "{{ MB_DB_PORT | int }}"
-    login_user: "{{ MB_DB_USER }}"
-    login_password: "{{ MB_DB_PASS }}"
-    login_db: "{{ MB_DB_DBNAME }}"
-    query: >
-      UPDATE metabase_database
-      SET details = JSON_SET(
-        details,
-        '$.host',     '{{ MB_DB_HOST }}',
-        '$.port',     CAST(3306 AS UNSIGNED),
-        '$.dbname',   '{{ hostvars[groups['dbs'][0]].db_name }}',
-        '$.user',     '{{ hostvars[groups['dbs'][0]].db_user }}',
-        '$.password', '{{ hostvars[groups['dbs'][0]].db_password }}'
-      )
-      WHERE name = 'moriarty'
-        AND (
-          JSON_EXTRACT(details,'$.host')  <> JSON_QUOTE('{{ MB_DB_HOST }}')
-          OR JSON_EXTRACT(details,'$.dbname') <> JSON_QUOTE('{{ hostvars[groups['dbs'][0]].db_name }}')
-          OR JSON_EXTRACT(details,'$.user')   <> JSON_QUOTE('{{ hostvars[groups['dbs'][0]].db_user }}')
-        );
+    login_user: root
+    query:
+      - "RESET REPLICA ALL"
+      - "RESET MASTER"
+  when: inventory_hostname in groups['db_replicas']
 
-- name: Verify saved connections
+- name: Disable read_only/super_read_only on REPLICAS for initial import
   community.mysql.mysql_query:
-    login_host: "{{ MB_DB_HOST }}"
-    login_port: "{{ MB_DB_PORT | int }}"
-    login_user: "{{ MB_DB_USER }}"
-    login_password: "{{ MB_DB_PASS }}"
-    login_db: "{{ MB_DB_DBNAME }}"
-    query: >
-      SELECT id, name,
-             JSON_UNQUOTE(JSON_EXTRACT(details,'$.host'))   AS host,
-             JSON_UNQUOTE(JSON_EXTRACT(details,'$.dbname')) AS dbname,
-             JSON_UNQUOTE(JSON_EXTRACT(details,'$.user'))   AS user
-      FROM metabase_database;
-  register: check_dbs
+    login_user: root
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when: inventory_hostname in groups['db_replicas']
 
-- name: Verify saved connections
-  debug:
-    var: check_dbs.query_result
-
-
-- name: Flush privileges
-  shell: "mysql -u root -e 'FLUSH PRIVILEGES;'"
+- name: Ensure plain SQL exists on REPLICAS
+  ansible.builtin.shell: gunzip -c {{ sql_seed_dump_path }} > {{ sql_extract_file }}
   args:
-    executable: /bin/bash
+    creates: "{{ sql_extract_file }}"
+  when: inventory_hostname in groups['db_replicas']
+
+- name: Import plain SQL on REPLICAS (applies SET @@GLOBAL.GTID_PURGED)
+  community.mysql.mysql_db:
+    name: "{{ metabase_db_name }}"
+    state: import
+    target: "{{ sql_extract_file }}"
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+
+- name: Re-enable read_only/super_read_only on REPLICAS after import
+  community.mysql.mysql_query:
+    login_user: root
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when: inventory_hostname in groups['db_replicas']
+
+# ==============================================================================
+# SECTION 5: START & VERIFY REPLICATION (REPLICAS ONLY)
+# ==============================================================================
+
+- name: CHANGE PRIMARY (GTID) on replicas
+  community.mysql.mysql_replication:
+    mode: changeprimary
+    master_host: "{{ hostvars[groups['db_primary'][0]].ansible_host | default(groups['db_primary'][0]) }}"
+    master_user: "{{ repl_user }}"
+    master_password: "{{ repl_password }}"
+    master_port: 3306
+    master_auto_position: yes
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+
+- name: START REPLICA on replicas
+  community.mysql.mysql_replication:
+    mode: startreplica
+    login_user: root
+  when: inventory_hostname in groups['db_replicas']
+
+- name: Get replication status (replicas)
+  community.mysql.mysql_replication:
+    mode: getreplica
+    login_user: root
+  register: repl_status
+  when: inventory_hostname in groups['db_replicas']
+
+- name: Show replication summary (replicas)
+  ansible.builtin.debug:
+    msg:
+      - "IO Thread Running: {{ repl_status.Replica_IO_Running | default('Error') }}"
+      - "SQL Thread Running: {{ repl_status.Replica_SQL_Running | default('Error') }}"
+      - "Last Error: {{ repl_status.Last_Error | default('None') }}"
+  when: inventory_hostname in groups['db_replicas']
+
+- name: Fail if replica is broken
+  ansible.builtin.fail:
+    msg: "Replication is broken! IO or SQL thread is not 'Yes'."
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - (repl_status.Replica_IO_Running | default('No')) != 'Yes' or (repl_status.Replica_SQL_Running | default('No')) != 'Yes'

@@ -1,7 +1,16 @@
 ---
+- name: Common base packages and Python tooling
+  hosts: moriarty
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+      tags: base
+      
 - name: Setup Mysql DB
   hosts: dbs
   become: true
+  gather_facts: true
   roles:
     - role: dbs
       tags: mysql
@@ -9,6 +18,7 @@
 - name: Setup moriarty runtime
   hosts: runtime
   become: true
+  gather_facts: true
   roles:
     - role: runtime
       tags: moriarty
@@ -16,6 +26,7 @@
 - name: upgrade-db
   hosts: dbs
   become: true
+  gather_facts: true
   roles:
     - role: upgrade-db
       tags: upgrade-db
@@ -23,6 +34,7 @@
 - name: Metabase DB tasks
   hosts: dbs
   become: true
+  gather_facts: true
   roles:
     - role: metabase
       tags: metabase
@@ -30,6 +42,7 @@
 - name: Metabase Runtime tasks
   hosts: runtime
   become: true
+  gather_facts: true
   roles:
     - role: metabase
       tags: metabase
