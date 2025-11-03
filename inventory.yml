@@ -41,7 +41,7 @@ moriarty:
     db_name: "moriaty"
     db_user: "devportal"
     db_password: "pass"
-    # metabase_db_name: "metabase"
+      #metabase_db_name: "metabase"
 
     repl_password: "pass"
 
