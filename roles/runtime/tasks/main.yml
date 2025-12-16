@@ -1,0 +1,604 @@
+---
+- name: Update the package index on RHEL
+  dnf:
+    name: "*"
+    state: latest
+    update_cache: yes
+
+- name: Set SELinux to permissive mode
+  ansible.builtin.command: setenforce 0
+
+- name: Ensure log directory exists
+  file:
+    path: /var/log
+    state: directory
+    mode: '0755'
+
+- name: Create Log File
+  file:
+      path: "{{ log_file }}"
+      state: touch
+
+- name: Log output to a log file
+  lineinfile:
+    path: "{{ log_file }}"
+    line: "Starting script..."
+    state: present
+
+- name: Install the GPG key for EPEL repository
+  rpm_key:
+    state: present
+    key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+
+- name: Install EPEL repository
+  dnf:
+    name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+    state: present
+
+
+- name: Enable PHP 8.2 module
+  command: dnf module enable php:8.2 -y
+  register: php_enable
+
+- name: Install PHP-8.2 module
+  command: dnf module install php:8.2 -y
+  when: php_enable.rc == 0
+
+
+
+- name: Update package index and install required packages
+  yum:
+    update_cache: yes
+    name:
+      - wget
+      - git
+      - zip
+      - supervisor
+      - composer
+      - nginx
+      - php
+      - php-cli
+      - php-fpm
+      - php-json
+      - php-mysqlnd
+      - php-zip
+      - php-gd
+      - php-intl
+      - php-mbstring
+      - php-curl
+      - php-xml
+      - php-pear
+      - php-soap
+      - php-bcmath
+      - php-dba
+      - php-dbg
+      - php-devel
+      - php-common
+      - php-embedded
+      - php-enchant
+      - php-gmp
+      - php-ldap
+      - php-odbc
+      - php-pdo
+      - php-opcache
+      - php-process
+      - php-snmp
+      - patch
+      - jq
+    state: present
+
+- name: Check if the Git repository already exists
+  stat:
+    path: /var/www/html/shushportal
+  register: repo_check
+
+- name: Mark the repository as safe for Git
+  command: git config --global --add safe.directory /var/www/html/shushportal
+
+
+- name: Clone Git repository if it does not exist
+  git:
+    repo: "{{ git_repo }}"
+    dest: "/var/www/html/shushportal"
+    version: v-1.3-mobileworldcongress
+    force: yes
+  when: not repo_check.stat.exists
+
+- name: Ensure the correct branch is checked out and up-to-date
+  git:
+    repo: "{{ git_repo }}"
+    dest: "/var/www/html/shushportal"
+    version:  v-1.3-mobileworldcongress
+    force: yes
+    update: yes
+
+- name: Change to the project directory and install Composer dependencies
+  ansible.builtin.shell: |
+    cd /var/www/html/shushportal
+    export COMPOSER_ALLOW_SUPERUSER=1
+    export COMPOSER_MEMORY_LIMIT=2G
+    echo "export COMPOSER_HOME=/usr/bin/composer" >> ~/.profile 
+    source ~/.profile 
+    /usr/bin/composer install --no-interaction
+  args:
+    executable: /bin/bash 
+
+- name: Resolve DB host from dbs group
+  set_fact:
+    db_host_resolved: >-
+      {{
+        (groups['dbs'] | map('extract', hostvars, 'db_host') | select('defined') | list | first)
+          | default(groups['dbs'] | map('extract', hostvars, 'ansible_host') | list | first)
+      }}
+- name: Show resolved DB host
+  debug:
+    msg: "Resolved DB host is {{ db_host_resolved }}"
+
+- name: Resolve DB credentials from dbs group
+  set_fact:
+    db_name: "{{ hostvars[groups['dbs'][0]].db_name }}"
+    db_user: "{{ hostvars[groups['dbs'][0]].db_user }}"
+    db_password: "{{ hostvars[groups['dbs'][0]].db_password }}"
+
+- name: Show database configuration values
+  debug:
+    msg:
+      - "db_name: {{ db_name }}"
+      - "db_user: {{ db_user }}"
+      - "db_password: {{ db_password }}"
+- name: Template PHP settings file
+  template:
+    src: settings.php.j2
+    dest: /var/www/html/shushportal/web/sites/default/settings.php  # Specify the destination path for the generated file
+  vars:
+    db_host: "{{ db_host_resolved }}"
+    db_user: "{{ db_user }}"
+    db_name: "{{ db_name }}"  
+    db_password: "{{ db_password }}"
+
+      
+- name: Ensure Nginx sites-enabled directory exists
+  file:
+    path: /etc/nginx/sites-enabled
+    state: directory
+    mode: '0755'
+
+- name: Ensure Script Dirctoruy
+  file:
+    path: /var/www/html/shushportal/scripts
+    state: directory
+    mode: '0755'
+
+
+- name: Write drupal-nginx. files
+  template:
+    src: drupal-nginx.conf
+    dest: "{{ drupal_nginx_conf }}"
+
+- name: Write nginx.conf files
+  template:
+    src: nginx.conf
+    dest: "{{ nginx_conf }}"
+    
+
+# - name: copy start-php-fpm files
+#   template:
+#     src: start-php-fpm.sh
+#     dest: "{{ start_php_fpm }}"
+#     mode: '0755'
+
+
+# - name: copy supervisor.conf files
+#   template:
+#     src: supervisor.conf
+#     dest: "{{ drupal_supervisor }}"
+#     mode: '0755'
+
+- name: Ensure the private directory exists
+  file:
+    path: /var/www/html/shushportal/private-files
+    state: directory
+    mode: '0755'
+
+
+- name: copy salt files
+  template:
+    src: salt.txt
+    dest: "{{ salt_file }}"
+
+
+
+# - name: Start NGINX using systemctl with shell
+#   ansible.builtin.shell: sudo systemctl restart nginx
+#   become: yes  # Ensures the command runs with elevated privileges
+
+- name: Create devportal group
+  group:
+    name: devportal
+    state: present
+    system: yes
+
+- name: Create devportal user
+  user:
+    name: devportal
+    group: devportal
+    home: /home/devportal
+    shell: /bin/bash
+    create_home: yes
+    system: yes
+
+- name: Change ownership of /var/www/html
+  file:
+    path: /var/www/html
+    owner: devportal
+    group: nginx
+    state: directory
+    recurse: yes
+
+- name: copy permission files
+  template:
+    src: set-permissions.sh
+    dest: "{{ set_permission_file }}"
+
+- name: Ensure set-permissions.sh is executable
+  file:
+    path: /var/www/html/shushportal/set-permissions.sh
+    mode: '0755'  # Ensure it's executable
+
+- name: Change ownership of /var/www/html
+  ansible.builtin.file:
+    path: /var/www/html
+    owner: devportal
+    group: nginx
+    recurse: yes
+
+- name: Set permissions for settings.php
+  ansible.builtin.file:
+    path: /var/www/html/shushportal/web/sites/default/settings.php
+    mode: '0664'
+    owner: devportal  # Set this to the appropriate user
+    group: nginx      # Set this to the appropriate group
+
+- name: Set permissions for the default directory
+  ansible.builtin.file:
+    path: /var/www/html/shushportal/web
+    mode: '0775'
+    recurse: yes
+    owner: devportal  # Set this to the appropriate user
+    group: nginx      # Set this to the appropriate group
+
+# - name: Run set-permissions.sh script
+#   command: /var/www/html/shushportal/set-permissions.sh --drupal_path=/var/www/html/shushportal/web --drupal_user=devportal --httpd_group=nginx
+
+# - name: Run drush commands
+#   shell: |
+#         /var/www/html/shushportal/vendor/bin/drush cr
+#         /var/www/html/shushportal/vendor/bin/drush cim -y
+#         /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
+#         /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
+#         /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
+#         /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
+#         /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
+#         /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
+#         /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
+#         /var/www/html/shushportal/vendor/bin/drush updb
+#         /var/www/html/shushportal/vendor/bin/drush cr
+#   args:
+#     executable: /bin/bash
+
+- name: Clear cache
+  command: /var/www/html/shushportal/vendor/bin/drush cr
+  register: drush_cr_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for cache clear
+  debug:
+    var: drush_cr_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+  
+- name: Import configuration
+  command: /var/www/html/shushportal/vendor/bin/drush cim -y
+  register: drush_cim_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for config import
+  debug:
+      var: drush_cim_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Enable zcs_apis module
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
+  register: drush_en_zcs_apis_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for enabling zcs_apis
+  debug:
+    var: drush_en_zcs_apis_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Enable shush theme
+  command: /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
+  register: drush_theme_en_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for enabling theme
+  debug:
+    var: drush_theme_en_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Set default theme
+  command: /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
+  register: drush_config_set_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for setting default theme
+  debug:
+    var: drush_config_set_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Enable zcs_user_management module
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
+  register: drush_en_zcs_user_management_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for enabling zcs_user_management
+  debug:
+    var: drush_en_zcs_user_management_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Enable zcs_client_management module
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
+  register: drush_en_zcs_client_management_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for enabling zcs_client_management
+  debug:
+    var: drush_en_zcs_client_management_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+
+# ---- API Gateway module selection (kong/aws/none) ----
+- name: Mark whether this host is the drush target
+  set_fact:
+    is_drush_target: >-
+      {{ (ansible_host | default(inventory_hostname)) == (drush_target_host | string) }}
+
+- name: Validate apigateway value
+  when: is_drush_target
+  assert:
+    that:
+      - apigateway in ['kong', 'aws', 'none']
+    fail_msg: "apigateway must be one of: kong, aws, none (got: {{ apigateway }})"
+  register: apigw_validation
+
+- name: Show apigateway value (validation passed)
+  when: is_drush_target
+  debug:
+    msg: "apigateway is set to: {{ apigateway }} (validation OK)"
+
+# --- Gateway module orchestration (idempotent) ---
+
+# Compute desired sets from apigateway (kong/aws/none)
+- name: Compute gateway enable/disable sets
+  when: is_drush_target | default(false)
+  set_fact:
+    gw_enable: "{{ ['zcs_kong'] if apigateway == 'kong' else (['zcs_aws'] if apigateway == 'aws' else []) }}"
+    gw_disable: "{{ ['zcs_aws'] if apigateway == 'kong' else (['zcs_kong'] if apigateway == 'aws' else ['zcs_kong','zcs_aws']) }}"
+
+- name: Show computed gateway sets
+  when: is_drush_target | default(false)
+  debug:
+    msg:
+      - "Modules to ENABLE: {{ gw_enable | join(', ') if gw_enable | length > 0 else 'none' }}"
+      - "Modules to DISABLE: {{ gw_disable | join(', ') if gw_disable | length > 0 else 'none' }}"
+
+# Ask Drush once which modules are enabled
+- name: Get list of enabled modules
+  when: is_drush_target | default(false)
+  command: /var/www/html/shushportal/vendor/bin/drush pml --status=enabled --format=list
+  args:
+    chdir: /var/www/html/shushportal
+  register: drush_enabled_modules
+  changed_when: false
+  failed_when: false
+
+# --- Enable only if not already enabled ---
+- name: Enable desired gateway module(s) (only if disabled)
+  when:
+    - is_drush_target | default(false)
+    - gw_enable | length > 0
+    - (drush_enabled_modules.stdout_lines | default([])) is iterable
+    - item not in (drush_enabled_modules.stdout_lines | default([]))
+  loop: "{{ gw_enable }}"
+  loop_control: { label: "{{ item }}" }
+  command: /var/www/html/shushportal/vendor/bin/drush en {{ item }} -y
+  args:
+    chdir: /var/www/html/shushportal
+  register: drush_gw_enable
+  failed_when: false
+  changed_when: >
+    ('success' in
+      ((drush_gw_enable.stdout | default('')) ~ (drush_gw_enable.stderr | default('')) ) | lower)
+
+- name: Output for enabling desired gateway module(s)
+  when: is_drush_target | default(false)
+  debug:
+    msg: >
+      {{ (item.item | default('n/a')) }} -> rc={{ item.rc | default('n/a') }},
+      changed={{ item.changed | default(false) }},
+      stdout_lines={{ item.stdout_lines | default([]) }},
+      stderr_lines={{ item.stderr_lines | default([]) }}
+  loop: "{{ drush_gw_enable.results | default([]) }}"
+
+# --- Disable only if currently enabled (default state is disabled) ---
+- name: Disable undesired gateway module(s) (only if enabled)
+  when:
+    - is_drush_target | default(false)
+    - gw_disable | length > 0
+    - (drush_enabled_modules.stdout_lines | default([])) is iterable
+    - item in (drush_enabled_modules.stdout_lines | default([]))
+  loop: "{{ gw_disable }}"
+  loop_control: { label: "{{ item }}" }
+  command: /var/www/html/shushportal/vendor/bin/drush pmu {{ item }} -y
+  args:
+    chdir: /var/www/html/shushportal
+  register: drush_gw_disable
+  failed_when: false
+  changed_when: >
+    ('success' in
+      ((drush_gw_disable.stdout | default('')) ~ (drush_gw_disable.stderr | default('')) ) | lower)
+
+- name: Output for disabling undesired gateway module(s)
+  when: is_drush_target | default(false)
+  debug:
+    msg: >
+      {{ (item.item | default('n/a')) }} -> rc={{ item.rc | default('n/a') }},
+      changed={{ item.changed | default(false) }},
+      stdout_lines={{ item.stdout_lines | default([]) }},
+      stderr_lines={{ item.stderr_lines | default([]) }}
+  loop: "{{ drush_gw_disable.results | default([]) }}"
+
+
+# ---- Enable api_attributes module ----
+# - name: disabling zcs_api_attributes module
+#   command: /var/www/html/shushportal/vendor/bin/drush en zcs_api_attributes -y
+#   register: drush_pmu_zcs_api_attributes_output
+#   when: inventory_hostname == drush_target_host 
+
+# - name: Show output for disabling zcs_api_attributess
+#   debug:
+#     var: drush_pmu_zcs_api_attributes_output.stdout_lines
+#   when: inventory_hostname == drush_target_host 
+
+# - name: Enable zcs_custom module
+#   command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
+#   register: drush_en_zcs_custom_output
+#   when: inventory_hostname == drush_target_host 
+
+# - name: Show output for enabling zcs_custom
+#   debug:
+#     var: drush_en_zcs_custom_output.stdout_lines
+#   when: inventory_hostname == drush_target_host 
+
+- name: Run database updates
+  command: /var/www/html/shushportal/vendor/bin/drush updb
+  register: drush_updb_output
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for database updates
+  debug:
+    var: drush_updb_output.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Clear cache again
+  command: /var/www/html/shushportal/vendor/bin/drush cr
+  register: drush_cr_output_final
+  when: inventory_hostname == drush_target_host 
+
+- name: Show output for final cache clear
+  debug:
+    var: drush_cr_output_final.stdout_lines
+  when: inventory_hostname == drush_target_host 
+
+- name: Change PHP-FPM user and group to nginx
+  command: sed -i -e 's/^user = apache/user = nginx/' -e 's/^group = apache/group = nginx/' /etc/php-fpm.d/www.conf
+
+- name: Restart PHP-FPM service
+  systemd:
+    name: php-fpm
+    state: restarted
+
+- name: Reload Nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
+- name: Ensure required SELinux packages are installed
+  package:
+    name: policycoreutils-python-utils
+    state: present
+  when: ansible_os_family == "RedHat"
+
+
+- name: Allow PHP-FPM (Nginx) to connect to a remote database
+  seboolean:
+    name: httpd_can_network_connect_db
+    state: yes
+    persistent: yes
+
+- name: Ensure Nginx and PHP-FPM start on boot
+  systemd:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  loop:
+    - nginx
+    - php-fpm
+
+# - name: Run Supervisor with Drupal configuration
+#   command: supervisord --nodaemon -c /etc/drupal_supervisor.conf
+  # async: 0  # Runs immediately
+  # poll: 0   # Do not wait for the command to complete
+  # register: supervisord_status
+
+# - name: Wait for Supervisor to start
+#   async_status:
+#     jid: "{{ supervisord_status.ansible_job_id }}"
+#   register: job_result
+#   until: job_result.finished
+#   retries: 10
+#   delay: 5
+
+- name: Log completion message
+  lineinfile:
+    path: "{{ log_file }}"
+    line: "Startup script completed successfully."
+    state: present
+
+- name: Ensure Git directory is marked safe
+  shell: git config --global --add safe.directory /var/www/html/shushportal
+  args:
+    chdir: /var/www/html/shushportal
+
+- name: Get latest Git tag
+  shell: git describe --tags --abbrev=0 || echo "v0.0.0"
+  args:
+    chdir: /var/www/html/shushportal
+  register: version_tag
+
+- name: Get Git commit SHA
+  shell: git rev-parse HEAD
+  args:
+    chdir: /var/www/html/shushportal
+  register: commit_sha
+
+- name: Get Git branch name
+  shell: git rev-parse --abbrev-ref HEAD
+  args:
+    chdir: /var/www/html/shushportal
+  register: branch_name
+
+- name: Get Drupal version via Drush
+  shell: /var/www/html/shushportal/vendor/bin/drush status | grep 'Drupal version' | awk -F ':' '{gsub(/^[ \t]+/, "", $2); print $2}'
+  register: drupal_version
+
+- name: Get build date (UTC)
+  shell: date -u +'%Y-%m-%dT%H:%M:%SZ'
+  register: build_date
+
+- name: Create version.json
+  copy:
+    dest: /var/www/html/shushportal/web/version.json
+    content: |
+      {
+        "version": "{{ version_tag.stdout }}",
+        "commit": "{{ commit_sha.stdout }}",
+        "branch": "{{ branch_name.stdout }}",
+        "build_date": "{{ build_date.stdout }}",
+        "environment": "{{ environment | default('unknown') }}",
+        "drupal_version": "{{ drupal_version.stdout }}"
+      }
+
+- name: Echo version path
+  debug:
+    msg: "version.json created at /var/www/html/shushportal/web/version"

@@ -1,0 +1,8 @@
+---
+- name: Include DB tasks for DB hosts
+  import_tasks: db_tasks.yml
+  when: "'dbs' in group_names"
+
+- name: Include Runtime tasks for Runtime hosts
+  import_tasks: runtime_tasks.yml
+  when: "'runtime' in group_names"

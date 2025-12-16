@@ -1,9 +1,0 @@
-#VM for the PostgresDB
-[dbservers]
-cts-den1-shportal1 IP=10.128.15.252
-
-
-#VMs for the API Gateway   
-[runtime]
-cts-den1-shportal2 IP=10.128.15.253
-cts-den1-shportal3 IP=10.128.15.251

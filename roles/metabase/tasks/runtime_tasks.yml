@@ -1,0 +1,241 @@
+# --- Packages ---------------------------------------------------------------
+- name: Update packages (RHEL/Rocky 9)
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest
+    update_cache: yes
+
+- name: Ensure Java 21 (and headless) are installed
+  ansible.builtin.dnf:
+    name:
+      - java-21-openjdk
+      - java-21-openjdk-headless
+    state: present
+
+# --- Locate java ------------------------------------------------------------
+- name: Find Java 21 binary via RPM (headless)
+  ansible.builtin.shell: "rpm -ql java-21-openjdk-headless | awk '/\\/bin\\/java$/ {print; exit}'"
+  register: java21_bin_rpm
+  changed_when: false
+  failed_when: false
+
+- name: Find Java 21 binary via filesystem (fallback)
+  ansible.builtin.shell: "ls -d /usr/lib/jvm/java-21-openjdk*/bin/java /usr/lib/jvm/jre-21-openjdk*/bin/java 2>/dev/null | head -1"
+  register: java21_bin_fs
+  changed_when: false
+  failed_when: false
+
+- name: Set Java binary used by Metabase
+  ansible.builtin.set_fact:
+    metabase_java_bin: >-
+      {{ (java21_bin_rpm.stdout | trim) if (java21_bin_rpm.stdout | trim)
+         else (java21_bin_fs.stdout | trim) if (java21_bin_fs.stdout | trim)
+         else '/usr/bin/java' }}
+
+# --- Workdir and user -------------------------------------------------------
+- name: Create metabase group
+  ansible.builtin.group:
+    name: metabase
+    system: yes
+
+- name: Create metabase user
+  ansible.builtin.user:
+    name: metabase
+    group: metabase
+    system: yes
+    shell: /bin/false
+
+- name: Create Metabase directory
+  ansible.builtin.file:
+    path: /var/www/html/shushportal/metabase
+    state: directory
+    owner: metabase
+    group: metabase
+    mode: '0755'
+
+- name: Create Metabase log file
+  ansible.builtin.file:
+    path: /var/log/metabase.log
+    state: touch
+    owner: metabase
+    group: metabase
+    mode: '0644'
+
+# --- Version and download ---------------------------------------------------
+- name: Default Metabase version if not provided
+  ansible.builtin.set_fact:
+    metabase_version: "{{ metabase_version | default('v0.50.33') }}"
+
+- name: Download Metabase JAR (idempotent)
+  ansible.builtin.get_url:
+    url: "https://downloads.metabase.com/{{ metabase_version }}/metabase.jar"
+    dest: /var/www/html/shushportal/metabase/metabase.jar
+    owner: metabase
+    group: metabase
+    mode: '0755'
+    force: no
+  register: mb_jar_dl
+
+# --- Work out DB primary + credentials --------------------------------------
+# Prefer the 'db_primary' group; fallback to first of 'dbs'.
+- name: Determine DB primary host from inventory
+  ansible.builtin.set_fact:
+    _db_primary_name: >-
+      {{ (groups['db_primary'] | first)
+         if ('db_primary' in groups and groups['db_primary']|length > 0)
+         else (groups['dbs'] | first) }}
+
+- name: Compute Metabase DB host
+  ansible.builtin.set_fact:
+    mb_db_host: "{{ hostvars[_db_primary_name].db_host | default(hostvars[_db_primary_name].ansible_host, true) }}"
+    mb_db_port: "{{ hostvars[_db_primary_name].mysql_login_port | default(3306) }}"
+    mb_db_name: "{{ hostvars[_db_primary_name].metabase_db_name | default('metabase') }}"
+    mb_db_user: "{{ hostvars[_db_primary_name].db_user | default('devportal') }}"
+    mb_db_pass: "{{ hostvars[_db_primary_name].db_password | default('pass') }}"
+
+- name: Show chosen DB host:port
+  ansible.builtin.debug:
+    msg: "Metabase will connect to MySQL at {{ mb_db_host }}:{{ mb_db_port }} (db={{ mb_db_name }}, user={{ mb_db_user }})"
+
+# --- Port / host / secret defaults ------------------------------------------
+- name: Default MB variables if not provided
+  ansible.builtin.set_fact:
+    MB_JETTY_HOST: "{{ MB_JETTY_HOST | default('0.0.0.0') }}"
+    MB_JETTY_PORT: "{{ MB_JETTY_PORT | default('3001') }}"
+    MB_ENCRYPTION_SECRET: "{{ MB_ENCRYPTION_SECRET | default('CHANGE_ME_AND_KEEP_SAME_ON_ALL_NODES') }}"
+    MB_LOG_LEVEL: "{{ MB_LOG_LEVEL | default('info') }}"
+    MB_PASSWORD_COMPLEXITY: "{{ MB_PASSWORD_COMPLEXITY | default('strong') }}"
+    MB_PASSWORD_LENGTH: "{{ MB_PASSWORD_LENGTH | default(10) }}"
+    MB_EMOJI_IN_LOGS: "{{ MB_EMOJI_IN_LOGS | default(true) }}"
+    MB_APPLICATION_DB_MAX_CONNECTION_POOL_SIZE: "{{ MB_APPLICATION_DB_MAX_CONNECTION_POOL_SIZE | default(50) }}"
+    MB_ANALYTICS_DB_MAX_CONNECTION_POOL_SIZE: "{{ MB_ANALYTICS_DB_MAX_CONNECTION_POOL_SIZE | default(20) }}"
+
+# --- Build env file content (all final values, no Jinja left) ---------------
+- name: Build Metabase environment map
+  ansible.builtin.set_fact:
+    metabase_env_vars:
+      MB_JETTY_HOST: "{{ MB_JETTY_HOST }}"
+      MB_JETTY_PORT: "{{ MB_JETTY_PORT }}"
+      MB_DB_TYPE: "mysql"
+      MB_DB_DBNAME: "{{ mb_db_name }}"
+      MB_DB_USER: "{{ mb_db_user }}"
+      MB_DB_PASS: "{{ mb_db_pass }}"
+      MB_DB_HOST: "{{ mb_db_host }}"
+      MB_DB_PORT: "{{ mb_db_port }}"
+      MB_PASSWORD_COMPLEXITY: "{{ MB_PASSWORD_COMPLEXITY }}"
+      MB_PASSWORD_LENGTH: "{{ MB_PASSWORD_LENGTH }}"
+      MB_EMOJI_IN_LOGS: "{{ MB_EMOJI_IN_LOGS }}"
+      MB_LOG_LEVEL: "{{ MB_LOG_LEVEL }}"
+      MB_APPLICATION_DB_MAX_CONNECTION_POOL_SIZE: "{{ MB_APPLICATION_DB_MAX_CONNECTION_POOL_SIZE }}"
+      MB_ANALYTICS_DB_MAX_CONNECTION_POOL_SIZE: "{{ MB_ANALYTICS_DB_MAX_CONNECTION_POOL_SIZE }}"
+      MB_ENCRYPTION_SECRET: "{{ MB_ENCRYPTION_SECRET }}"
+
+- name: Write /etc/default/metabase (rendered values)
+  ansible.builtin.copy:
+    dest: /etc/default/metabase
+    owner: metabase
+    group: metabase
+    mode: "0644"
+    content: |
+      {% for key, value in metabase_env_vars.items() %}
+      {{ key }}={{ value }}
+      {% endfor %}
+
+# --- Systemd unit -----------------------------------------------------------
+- name: Create Metabase systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/metabase.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Metabase server
+      After=network.target
+
+      [Service]
+      WorkingDirectory=/var/www/html/shushportal/metabase
+      EnvironmentFile=/etc/default/metabase
+      ExecStart={{ metabase_java_bin }} --add-opens java.base/java.nio=ALL-UNNAMED -jar /var/www/html/shushportal/metabase/metabase.jar
+      User=metabase
+      Type=simple
+      StandardOutput=append:/var/log/metabase.log
+      StandardError=append:/var/log/metabase.log
+      SuccessExitStatus=143
+      TimeoutStopSec=120
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: systemd daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# --- (Optional) avoid migration lock: start only leader ---------------------
+# Set metabase_migration_singleton=true to only auto-start on the first runtime host.
+- name: Decide who is migration leader
+  ansible.builtin.set_fact:
+    metabase_migration_singleton: "{{ metabase_migration_singleton | default(true) | bool }}"
+    metabase_is_leader: "{{ (inventory_hostname == (groups['runtime'] | first)) | bool if ('runtime' in groups and groups['runtime']|length>0) else true }}"
+
+# Start/enable logic:
+- name: Start metabase on leader (or on all if singleton disabled)
+  ansible.builtin.systemd:
+    name: metabase
+    state: started
+    enabled: yes
+  when: (not metabase_migration_singleton) or metabase_is_leader
+
+- name: Enable but do not start metabase on non-leaders (to avoid Liquibase lock)
+  ansible.builtin.systemd:
+    name: metabase
+    state: stopped
+    enabled: yes
+  when: metabase_migration_singleton and (not metabase_is_leader)
+
+# --- Health wait (only where we started it) ---------------------------------
+- name: Wait for Metabase TCP port (where started)
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ MB_JETTY_PORT | int }}"
+    timeout: 300
+  when: (not metabase_migration_singleton) or metabase_is_leader
+
+# Health endpoint can return 200 even while initializing; wait for JSON status: ok
+- name: Poll Metabase health until status ok (where started)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ MB_JETTY_PORT }}/api/health"
+    method: GET
+    return_content: yes
+    status_code: 200
+  register: mb_health
+  until: (mb_health.status == 200) and ((mb_health.json.status | default('')) == 'ok')
+  retries: 120         # ~10 minutes
+  delay: 5
+  failed_when: false
+  changed_when: false
+  when: (not metabase_migration_singleton) or metabase_is_leader
+
+- name: Start metabase on non-leader nodes (after leader is healthy)
+  ansible.builtin.systemd:
+    name: metabase
+    state: started
+    enabled: yes
+  when:
+    # This condition should be the same as your 'Enable but do not start' task
+    - metabase_run_singleton | default(true)
+    - inventory_hostname != (groups['runtime'] | first)
+  tags: metabase
+
+- name: Poll Metabase health on ALL nodes (after all are started)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ metabase_env_vars.MB_JETTY_PORT }}/api/health"
+    method: GET
+    return_content: yes
+    status_code: [200, 503]
+  register: mb_health_all
+  until: mb_health_all.status == 200
+  retries: 60   # Try for 5 minutes (60 retries * 5s delay)
+  delay: 5
+  changed_when: false
+  tags: metabase
