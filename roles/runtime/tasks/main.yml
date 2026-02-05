@@ -87,6 +87,29 @@
       - jq
     state: present
 
+- name: Create devportal group
+  group:
+    name: devportal
+    state: present
+    system: yes
+
+- name: Create devportal user
+  user:
+    name: devportal
+    group: devportal
+    home: /home/devportal
+    shell: /bin/bash
+    create_home: yes
+    system: yes
+
+- name: Ensure composer home exists and is writable
+  file:
+    path: /home/devportal/.composer
+    state: directory
+    owner: devportal
+    group: devportal
+    mode: "0775"
+
 - name: Check if the Git repository already exists
   stat:
     path: /var/www/html/shushportal
@@ -112,16 +135,23 @@
     force: yes
     update: yes
 
-- name: Change to the project directory and install Composer dependencies
-  ansible.builtin.shell: |
-    cd /var/www/html/shushportal
-    export COMPOSER_ALLOW_SUPERUSER=1
-    export COMPOSER_MEMORY_LIMIT=2G
-    echo "export COMPOSER_HOME=/usr/bin/composer" >> ~/.profile 
-    source ~/.profile 
-    /usr/bin/composer install --no-interaction
+- name: Ensure ownership of application directory
+  file:
+    path: /var/www/html
+    owner: devportal
+    group: nginx
+    state: directory
+    recurse: yes
+
+- name: Install Composer dependencies (no-dev) as devportal
+  become: yes
+  become_user: devportal
+  command: /usr/bin/composer install --no-dev --prefer-dist --no-progress --optimize-autoloader --no-interaction
   args:
-    executable: /bin/bash 
+    chdir: /var/www/html/shushportal
+  environment:
+    COMPOSER_HOME: /home/devportal/.composer
+    COMPOSER_MEMORY_LIMIT: "2G"
 
 - name: Resolve DB host from dbs group
   set_fact:
@@ -156,6 +186,12 @@
     db_name: "{{ db_name }}"  
     db_password: "{{ db_password }}"
 
+- name: Ensure the private directory exists
+  file:
+    path: /var/www/html/shushportal/private-files
+    state: directory
+    mode: '0755'
+
       
 - name: Ensure Nginx sites-enabled directory exists
   file:
@@ -169,6 +205,10 @@
     state: directory
     mode: '0755'
 
+- name: copy salt files
+  template:
+    src: salt.txt
+    dest: "{{ salt_file }}"
 
 - name: Write drupal-nginx. files
   template:
@@ -180,52 +220,6 @@
     src: nginx.conf
     dest: "{{ nginx_conf }}"
     
-
-# - name: copy start-php-fpm files
-#   template:
-#     src: start-php-fpm.sh
-#     dest: "{{ start_php_fpm }}"
-#     mode: '0755'
-
-
-# - name: copy supervisor.conf files
-#   template:
-#     src: supervisor.conf
-#     dest: "{{ drupal_supervisor }}"
-#     mode: '0755'
-
-- name: Ensure the private directory exists
-  file:
-    path: /var/www/html/shushportal/private-files
-    state: directory
-    mode: '0755'
-
-
-- name: copy salt files
-  template:
-    src: salt.txt
-    dest: "{{ salt_file }}"
-
-
-
-# - name: Start NGINX using systemctl with shell
-#   ansible.builtin.shell: sudo systemctl restart nginx
-#   become: yes  # Ensures the command runs with elevated privileges
-
-- name: Create devportal group
-  group:
-    name: devportal
-    state: present
-    system: yes
-
-- name: Create devportal user
-  user:
-    name: devportal
-    group: devportal
-    home: /home/devportal
-    shell: /bin/bash
-    create_home: yes
-    system: yes
 
 - name: Change ownership of /var/www/html
   file:
@@ -267,238 +261,52 @@
     owner: devportal  # Set this to the appropriate user
     group: nginx      # Set this to the appropriate group
 
-# - name: Run set-permissions.sh script
-#   command: /var/www/html/shushportal/set-permissions.sh --drupal_path=/var/www/html/shushportal/web --drupal_user=devportal --httpd_group=nginx
-
-# - name: Run drush commands
-#   shell: |
-#         /var/www/html/shushportal/vendor/bin/drush cr
-#         /var/www/html/shushportal/vendor/bin/drush cim -y
-#         /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
-#         /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
-#         /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
-#         /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
-#         /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
-#         /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
-#         /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
-#         /var/www/html/shushportal/vendor/bin/drush updb
-#         /var/www/html/shushportal/vendor/bin/drush cr
-#   args:
-#     executable: /bin/bash
-
-- name: Clear cache
-  command: /var/www/html/shushportal/vendor/bin/drush cr
-  register: drush_cr_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for cache clear
-  debug:
-    var: drush_cr_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-  
-- name: Import configuration
-  command: /var/www/html/shushportal/vendor/bin/drush cim -y
-  register: drush_cim_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for config import
-  debug:
-      var: drush_cim_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-
-- name: Enable zcs_apis module
-  command: /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
-  register: drush_en_zcs_apis_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for enabling zcs_apis
-  debug:
-    var: drush_en_zcs_apis_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-
-- name: Enable shush theme
-  command: /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
-  register: drush_theme_en_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for enabling theme
-  debug:
-    var: drush_theme_en_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-
-- name: Set default theme
-  command: /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
-  register: drush_config_set_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for setting default theme
-  debug:
-    var: drush_config_set_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-
-- name: Enable zcs_user_management module
-  command: /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
-  register: drush_en_zcs_user_management_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for enabling zcs_user_management
-  debug:
-    var: drush_en_zcs_user_management_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-
-- name: Enable zcs_client_management module
-  command: /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
-  register: drush_en_zcs_client_management_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for enabling zcs_client_management
-  debug:
-    var: drush_en_zcs_client_management_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
-
-
-# ---- API Gateway module selection (kong/aws/none) ----
 - name: Mark whether this host is the drush target
   set_fact:
     is_drush_target: >-
       {{ (ansible_host | default(inventory_hostname)) == (drush_target_host | string) }}
 
-- name: Validate apigateway value
-  when: is_drush_target
-  assert:
-    that:
-      - apigateway in ['kong', 'aws', 'none']
-    fail_msg: "apigateway must be one of: kong, aws, none (got: {{ apigateway }})"
-  register: apigw_validation
-
-- name: Show apigateway value (validation passed)
-  when: is_drush_target
-  debug:
-    msg: "apigateway is set to: {{ apigateway }} (validation OK)"
-
-# --- Gateway module orchestration (idempotent) ---
-
-# Compute desired sets from apigateway (kong/aws/none)
-- name: Compute gateway enable/disable sets
+- name: Clear cache
   when: is_drush_target | default(false)
-  set_fact:
-    gw_enable: "{{ ['zcs_kong'] if apigateway == 'kong' else (['zcs_aws'] if apigateway == 'aws' else []) }}"
-    gw_disable: "{{ ['zcs_aws'] if apigateway == 'kong' else (['zcs_kong'] if apigateway == 'aws' else ['zcs_kong','zcs_aws']) }}"
+  command: /var/www/html/shushportal/vendor/bin/drush cr
 
-- name: Show computed gateway sets
+- name: Import configuration
   when: is_drush_target | default(false)
-  debug:
-    msg:
-      - "Modules to ENABLE: {{ gw_enable | join(', ') if gw_enable | length > 0 else 'none' }}"
-      - "Modules to DISABLE: {{ gw_disable | join(', ') if gw_disable | length > 0 else 'none' }}"
+  command: /var/www/html/shushportal/vendor/bin/drush cim -y
 
-# Ask Drush once which modules are enabled
-- name: Get list of enabled modules
+- name: Enable zcs_apis module
   when: is_drush_target | default(false)
-  command: /var/www/html/shushportal/vendor/bin/drush pml --status=enabled --format=list
-  args:
-    chdir: /var/www/html/shushportal
-  register: drush_enabled_modules
-  changed_when: false
-  failed_when: false
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_apis -y
 
-# --- Enable only if not already enabled ---
-- name: Enable desired gateway module(s) (only if disabled)
-  when:
-    - is_drush_target | default(false)
-    - gw_enable | length > 0
-    - (drush_enabled_modules.stdout_lines | default([])) is iterable
-    - item not in (drush_enabled_modules.stdout_lines | default([]))
-  loop: "{{ gw_enable }}"
-  loop_control: { label: "{{ item }}" }
-  command: /var/www/html/shushportal/vendor/bin/drush en {{ item }} -y
-  args:
-    chdir: /var/www/html/shushportal
-  register: drush_gw_enable
-  failed_when: false
-  changed_when: >
-    ('success' in
-      ((drush_gw_enable.stdout | default('')) ~ (drush_gw_enable.stderr | default('')) ) | lower)
-
-- name: Output for enabling desired gateway module(s)
+- name: Enable shush theme
   when: is_drush_target | default(false)
-  debug:
-    msg: >
-      {{ (item.item | default('n/a')) }} -> rc={{ item.rc | default('n/a') }},
-      changed={{ item.changed | default(false) }},
-      stdout_lines={{ item.stdout_lines | default([]) }},
-      stderr_lines={{ item.stderr_lines | default([]) }}
-  loop: "{{ drush_gw_enable.results | default([]) }}"
+  command: /var/www/html/shushportal/vendor/bin/drush theme:en shush -y
 
-# --- Disable only if currently enabled (default state is disabled) ---
-- name: Disable undesired gateway module(s) (only if enabled)
-  when:
-    - is_drush_target | default(false)
-    - gw_disable | length > 0
-    - (drush_enabled_modules.stdout_lines | default([])) is iterable
-    - item in (drush_enabled_modules.stdout_lines | default([]))
-  loop: "{{ gw_disable }}"
-  loop_control: { label: "{{ item }}" }
-  command: /var/www/html/shushportal/vendor/bin/drush pmu {{ item }} -y
-  args:
-    chdir: /var/www/html/shushportal
-  register: drush_gw_disable
-  failed_when: false
-  changed_when: >
-    ('success' in
-      ((drush_gw_disable.stdout | default('')) ~ (drush_gw_disable.stderr | default('')) ) | lower)
-
-- name: Output for disabling undesired gateway module(s)
+- name: Set default theme
   when: is_drush_target | default(false)
-  debug:
-    msg: >
-      {{ (item.item | default('n/a')) }} -> rc={{ item.rc | default('n/a') }},
-      changed={{ item.changed | default(false) }},
-      stdout_lines={{ item.stdout_lines | default([]) }},
-      stderr_lines={{ item.stderr_lines | default([]) }}
-  loop: "{{ drush_gw_disable.results | default([]) }}"
+  command: /var/www/html/shushportal/vendor/bin/drush config-set system.theme default shush -y
 
+- name: Enable zcs_user_management module
+  when: is_drush_target | default(false)
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_user_management -y
 
-# ---- Enable api_attributes module ----
-# - name: disabling zcs_api_attributes module
-#   command: /var/www/html/shushportal/vendor/bin/drush en zcs_api_attributes -y
-#   register: drush_pmu_zcs_api_attributes_output
-#   when: inventory_hostname == drush_target_host 
+- name: Enable zcs_client_management module
+  when: is_drush_target | default(false)
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_client_management -y
 
-# - name: Show output for disabling zcs_api_attributess
-#   debug:
-#     var: drush_pmu_zcs_api_attributes_output.stdout_lines
-#   when: inventory_hostname == drush_target_host 
+- name: Enable Kong Module
+  when: is_drush_target | default(false)
+  command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
 
-# - name: Enable zcs_custom module
-#   command: /var/www/html/shushportal/vendor/bin/drush en zcs_custom -y
-#   register: drush_en_zcs_custom_output
-#   when: inventory_hostname == drush_target_host 
-
-# - name: Show output for enabling zcs_custom
-#   debug:
-#     var: drush_en_zcs_custom_output.stdout_lines
-#   when: inventory_hostname == drush_target_host 
 
 - name: Run database updates
-  command: /var/www/html/shushportal/vendor/bin/drush updb
-  register: drush_updb_output
-  when: inventory_hostname == drush_target_host 
-
-- name: Show output for database updates
-  debug:
-    var: drush_updb_output.stdout_lines
-  when: inventory_hostname == drush_target_host 
+  when: is_drush_target | default(false)
+  command: /var/www/html/shushportal/vendor/bin/drush updb -y
 
 - name: Clear cache again
+  when: is_drush_target | default(false)
   command: /var/www/html/shushportal/vendor/bin/drush cr
-  register: drush_cr_output_final
-  when: inventory_hostname == drush_target_host 
 
-- name: Show output for final cache clear
-  debug:
-    var: drush_cr_output_final.stdout_lines
-  when: inventory_hostname == drush_target_host 
 
 - name: Change PHP-FPM user and group to nginx
   command: sed -i -e 's/^user = apache/user = nginx/' -e 's/^group = apache/group = nginx/' /etc/php-fpm.d/www.conf

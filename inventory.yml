@@ -6,16 +6,16 @@ moriarty:
     db_primary:
       hosts:
         db-primary:
-          ansible_host: 10.128.0.3
+          ansible_host: 10.128.0.36
           server_id: 1
-          db_host: "10.128.0.3"
+          db_host: "10.128.0.36"
 
     db_replicas:
       hosts:
         db-replica-1:
-          ansible_host: 10.128.0.52 
+          ansible_host: 10.128.0.23
           server_id: 2
-          db_host: "10.128.0.52"
+          db_host: "10.128.0.23"
 
     dbs:
       children:
@@ -25,18 +25,17 @@ moriarty:
     runtime:
       hosts:
         web-1:
-          ansible_host: 10.128.15.242
+          ansible_host: 10.128.0.35
         web-2:
-          ansible_host: 10.128.0.128
-        web-3:
-          ansible_host: 10.128.0.129
+          ansible_host: 10.128.0.36
+
 
   # --- Shared vars ---
   vars:
     ansible_port: 22
     ansible_user: ansible
 
-    drush_target_host: 10.128.15.242
+    drush_target_host: 10.128.0.35
 
     db_name: "moriaty"
     db_user: "devportal"
@@ -46,8 +45,8 @@ moriarty:
     repl_password: "pass"
 
     # Convenience vars for settings.php template
-    db_host_primary:  "10.128.0.3"
-    db_host_replica1: "10.128.0.52"
+    db_host_primary:  "10.128.0.36"
+    db_host_replica1: "10.128.0.23"
 
     # # Toggle: route moriarty  through ProxySQL
     # use_proxysql: true
