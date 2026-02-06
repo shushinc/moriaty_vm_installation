@@ -46,3 +46,35 @@
   roles:
     - role: metabase
       tags: metabase
+
+- name: Moriarty Backup runtime (moriarty  files)
+  hosts: runtime
+  become: true
+  gather_facts: true
+  roles:
+    - role: backup
+      tags: backup
+
+- name: Moriarty Backup databases (DB PRIMARY only)
+  hosts: db_primary
+  become: true
+  gather_facts: true
+  roles:
+    - role: backup
+      tags: backup
+
+- name: Moriarty Restore databases (DB PRIMARY only)
+  hosts: db_primary
+  become: true
+  gather_facts: true
+  roles:
+    - role: restore
+  tags: [restore]
+
+- name: Moriarty Restore runtime (moriarty files)
+  hosts: runtime
+  become: true
+  gather_facts: true
+  roles:
+    - role: restore
+  tags: [restore]
