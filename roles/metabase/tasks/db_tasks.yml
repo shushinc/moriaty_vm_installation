@@ -173,7 +173,7 @@
       ) WHERE name = 'metabase';
   when:
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) > 0  
+    - (mb_table_check.query_result[0][0].c | default(0) | int) > 0
 
 - name: Fix Metabase's internal connection to MORIARTY db (primary only)
   community.mysql.mysql_query:
@@ -192,7 +192,7 @@
       ) WHERE name = 'moriarty'
   when:
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) > 0
+    - (mb_table_check.query_result[0][0].c | default(0) | int) > 0
 
 
 # ==============================================================================
