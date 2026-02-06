@@ -1,0 +1,8 @@
+---
+backup_base_dir: /var/www/html/backup/moriarty-backup-data
+drupal_root: /var/www/html/shushportal
+drush_path: /var/www/html/shushportal/vendor/bin/drush
+metabase_db_name: "metabase_db"
+
+
+
