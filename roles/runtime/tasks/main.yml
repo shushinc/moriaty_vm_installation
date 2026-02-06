@@ -298,16 +298,13 @@
   when: is_drush_target | default(false)
   command: /var/www/html/shushportal/vendor/bin/drush en zcs_kong -y
 
+- name: Disable zcs_consent module when consent_check is OFF
+  ansible.builtin.command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_consent -y
+  when: consent_check | lower == "off"
 
 - name: Run database updates
   when: is_drush_target | default(false)
   command: /var/www/html/shushportal/vendor/bin/drush updb -y
-
-- name: Disable zcs_consent module when consent_check is OFF (drush target only)
-  ansible.builtin.command: /var/www/html/shushportal/vendor/bin/drush pmu zcs_consent -y
-  when:
-    - is_drush_target | default(false)
-    - consent_check | lower == "off"
 
 - name: Clear cache again
   when: is_drush_target | default(false)
