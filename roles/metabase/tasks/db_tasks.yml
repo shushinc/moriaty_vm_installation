@@ -1,9 +1,5 @@
 # FILE: db_tasks.yml
 ---
-# ==============================================================================
-# SECTION 1: DEFAULT VARS
-# ==============================================================================
-
 - name: Set defaults for Metabase + replication vars
   set_fact:
     repl_user: "{{ repl_user | default('repl') }}"
@@ -20,10 +16,6 @@
     sql_extract_file: "/tmp/metabase_db.sql"
     controller_seed_dump_path: "/tmp/metabase-seed-{{ metabase_db_name }}.sql.gz"
 
-
-# ==============================================================================
-# SECTION 2: INSTALLATION & CONFIG (ALL DB NODES)
-# ==============================================================================
 
 - name: (SELinux) ensure tools present
   ansible.builtin.package:
@@ -97,10 +89,6 @@
     state: restarted
   when: mysql_config_change.changed
 
-# ==============================================================================
-# SECTION 3: INITIALIZE PRIMARY (PRIMARY ONLY)
-# ==============================================================================
-
 - name: Create replication user (primary only)
   community.mysql.mysql_user:
     name: "{{ repl_user }}"
@@ -172,15 +160,40 @@
   community.mysql.mysql_query:
     login_user: root
     query: >
-      UPDATE {{ metabase_db_name }}.metabase_database SET details = JSON_SET(
-        details,
-        '$.host',     '{{ db_host_primary }}',
-        '$.user',     '{{ metabase_db_user }}',
-        '$.password', '{{ metabase_db_password }}'
+      UPDATE {{ metabase_db_name }}.metabase_database
+      SET details = JSON_UNQUOTE(
+        JSON_SET(
+          CAST(details AS JSON),
+          '$.host', '{{ db_host_primary }}',
+          '$.port', 3306,
+          '$.dbname', '{{ metabase_db_name }}',
+          '$.user', '{{ metabase_db_user }}',
+          '$.password', '{{ metabase_db_password }}'
+        )
       ) WHERE name = 'metabase';
   when:
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) > 0  # Only run if table exists
+    - (mb_table_check.query_result[0][0].c | default(0) | int) > 0
+
+- name: Fix Metabase's internal connection to MORIARTY db (primary only)
+  community.mysql.mysql_query:
+    login_user: root
+    query: >
+      UPDATE {{ metabase_db_name }}.metabase_database
+      SET details = JSON_UNQUOTE(
+        JSON_SET(
+          CAST(details AS JSON),
+          '$.host', '{{ db_host_primary }}',
+          '$.port', 3306,
+          '$.dbname', '{{ db_name }}',
+          '$.user', '{{ db_user }}',
+          '$.password', '{{ db_password }}'
+        )
+      ) WHERE name = 'moriarty'
+  when:
+    - inventory_hostname in groups['db_primary']
+    - (mb_table_check.query_result[0][0].c | default(0) | int) > 0
+
 
 # ==============================================================================
 # SECTION 4: SEED REPLICAS (ALL DB NODES)
