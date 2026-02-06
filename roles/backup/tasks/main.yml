@@ -1,0 +1,59 @@
+---
+- name: Ensure moriarty backup directory structure exists
+  become: yes
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: devportal
+    group: nginx
+    mode: '0755'
+  loop:
+    - "{{ backup_base_dir }}"
+    - "{{ backup_base_dir }}/runtime"
+    - "{{ backup_base_dir }}/database"
+
+
+- name: Backup Drupal runtime (shushportal)
+  become: yes
+  become_user: devportal
+  archive:
+    path: "{{ drupal_root }}"
+    dest: "{{ backup_base_dir }}/runtime/shushportal-{{ backup_timestamp }}.tar.gz"
+    format: gz
+    exclude_path:
+      - "{{ drupal_root }}/.git"
+      - "{{ drupal_root }}/.ddev"
+  when: is_drush_target | default(false)
+
+
+- name: Backup moriaty database (PRIMARY only)
+  become: yes
+  shell: |
+    mysqldump \
+      --single-transaction \
+      --routines \
+      --triggers \
+      --events \
+      -u {{ db_user }} -p'{{ db_password }}' \
+      moriaty \
+      | gzip -9 \
+      > {{ backup_base_dir }}/database/moriaty-{{ backup_timestamp }}.sql.gz
+  args:
+    executable: /bin/bash
+  when: inventory_hostname == groups['db_primary'][0]
+
+- name: Backup metabase_db database (PRIMARY only)
+  become: yes
+  shell: |
+    mysqldump \
+      --single-transaction \
+      --routines \
+      --triggers \
+      --events \
+      -u {{ metabase_db_user }} -p'{{ metabase_db_password }}' \
+      metabase_db \
+      | gzip -9 \
+      > {{ backup_base_dir }}/database/metabase_db-{{ backup_timestamp }}.sql.gz
+  args:
+    executable: /bin/bash
+  when: inventory_hostname == groups['db_primary'][0]
