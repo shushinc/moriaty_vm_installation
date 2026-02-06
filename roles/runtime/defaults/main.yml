@@ -14,5 +14,5 @@ start_php_fpm: "/var/www/html/shushportal/scripts/start-php-fpm.sh"
 drupal_supervisor: "/etc/drupal_supervisor.conf"
 apigateway: "kong"   #currently support only aws, kong only, if not set to  none
 git_version: main
-
+consent_check: "off" # off or on
 
