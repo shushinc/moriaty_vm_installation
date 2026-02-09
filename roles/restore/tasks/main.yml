@@ -47,13 +47,14 @@
   become: yes
   shell: |
     set -euo pipefail
-    gunzip -c "{{ metabase_sql_gz }}" | mysql -u "{{ metabase_db_user }}" -p'{{ metabase_db_password }}' "{{ metabase_db_name | default('metabase_db') }}"
+    gunzip -c "{{ metabase_sql_gz }}" | mysql -u "{{ db_user }}" -p'{{ db_password }}' "{{ metabase_db_name | default('metabase_db') }}"
   args:
     executable: /bin/bash
   when:
     - inventory_hostname == groups['db_primary'][0]
     - metabase_bak.stat.exists
   tags: restore
+
 
 # -----------------------------
 # RUNTIME RESTORE (drush target only)
@@ -88,17 +89,19 @@
     - runtime_bak.stat.exists
   tags: restore
 
-- name: Extract runtime tarball to /
+- name: Extract runtime tarball to /var/www/html
   become: yes
   shell: |
     set -euo pipefail
-    tar -xzf "{{ runtime_tgz }}" -C /
+    mkdir -p /var/www/html
+    tar -xzf "{{ runtime_tgz }}" -C /var/www/html
   args:
     executable: /bin/bash
   when:
     - is_drush_target | default(false)
     - runtime_bak.stat.exists
   tags: restore
+
 
 - name: Fix ownership on drupal root
   become: yes
