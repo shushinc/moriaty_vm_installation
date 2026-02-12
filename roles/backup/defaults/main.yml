@@ -1,0 +1,6 @@
+---
+backup_base_dir: /var/www/html/backup/moriarty-backup-data
+drupal_root: /var/www/html/shushportal
+backup_timestamp: "{{ ansible_date_time.iso8601_basic }}"
+
+

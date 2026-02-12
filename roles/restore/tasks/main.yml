@@ -1,0 +1,131 @@
+---
+- name: Ensure restore_ts is provided
+  assert:
+    that:
+      - restore_ts is defined
+      - restore_ts | length > 5
+    fail_msg: "Pass restore timestamp like: -e restore_ts=20260206T230155"
+  tags: restore
+
+- name: Set restore file paths
+  set_fact:
+    runtime_tgz: "{{ backup_base_dir }}/runtime/shushportal-{{ restore_ts }}.tar.gz"
+    moriaty_sql_gz: "{{ backup_base_dir }}/database/{{ db_name }}-{{ restore_ts }}.sql.gz"
+    metabase_sql_gz: "{{ backup_base_dir }}/database/{{ metabase_db_name | default('metabase_db') }}-{{ restore_ts }}.sql.gz"
+  tags: restore
+
+# -----------------------------
+# DB RESTORE (db_primary only)
+# -----------------------------
+- name: Check moriaty backup exists (PRIMARY)
+  stat:
+    path: "{{ moriaty_sql_gz }}"
+  register: moriaty_bak
+  when: inventory_hostname == groups['db_primary'][0]
+  tags: restore
+
+- name: Restore moriaty DB from gz (PRIMARY)
+  become: yes
+  shell: |
+    set -euo pipefail
+    gunzip -c "{{ moriaty_sql_gz }}" | mysql -u "{{ db_user }}" -p'{{ db_password }}' "{{ db_name }}"
+  args:
+    executable: /bin/bash
+  when:
+    - inventory_hostname == groups['db_primary'][0]
+    - moriaty_bak.stat.exists
+  tags: restore
+
+- name: Check metabase backup exists (PRIMARY)
+  stat:
+    path: "{{ metabase_sql_gz }}"
+  register: metabase_bak
+  when: inventory_hostname == groups['db_primary'][0]
+  tags: restore
+
+- name: Restore metabase_db from gz (PRIMARY)
+  become: yes
+  shell: |
+    set -euo pipefail
+    gunzip -c "{{ metabase_sql_gz }}" | mysql -u "{{ metabase_db_user }}" -p'{{ metabase_db_password }}' "{{ metabase_db_name | default('metabase_db') }}"
+  args:
+    executable: /bin/bash
+  when:
+    - inventory_hostname == groups['db_primary'][0]
+    - metabase_bak.stat.exists
+  tags: restore
+
+# -----------------------------
+# RUNTIME RESTORE (drush target only)
+# -----------------------------
+- name: Check runtime backup exists (drush target only)
+  stat:
+    path: "{{ runtime_tgz }}"
+  register: runtime_bak
+  when: is_drush_target | default(false)
+  tags: restore
+
+- name: Enable maintenance mode (drush target only)
+  become: yes
+  become_user: devportal
+  command: "{{ drush_path }} sset system.maintenance_mode 1 -y"
+  when:
+    - is_drush_target | default(false)
+    - runtime_bak.stat.exists
+  tags: restore
+
+- name: Move current runtime out of the way (safety)
+  become: yes
+  shell: |
+    set -euo pipefail
+    if [ -d "{{ drupal_root }}" ]; then
+      mv "{{ drupal_root }}" "{{ drupal_root }}.pre-restore.{{ restore_ts }}"
+    fi
+  args:
+    executable: /bin/bash
+  when:
+    - is_drush_target | default(false)
+    - runtime_bak.stat.exists
+  tags: restore
+
+- name: Extract runtime tarball to /
+  become: yes
+  shell: |
+    set -euo pipefail
+    tar -xzf "{{ runtime_tgz }}" -C /
+  args:
+    executable: /bin/bash
+  when:
+    - is_drush_target | default(false)
+    - runtime_bak.stat.exists
+  tags: restore
+
+- name: Fix ownership on drupal root
+  become: yes
+  file:
+    path: "{{ drupal_root }}"
+    owner: devportal
+    group: nginx
+    recurse: yes
+  when:
+    - is_drush_target | default(false)
+    - runtime_bak.stat.exists
+  tags: restore
+
+- name: Cache rebuild
+  become: yes
+  become_user: devportal
+  command: "{{ drush_path }} cr"
+  when:
+    - is_drush_target | default(false)
+    - runtime_bak.stat.exists
+  tags: restore
+
+- name: Disable maintenance mode
+  become: yes
+  become_user: devportal
+  command: "{{ drush_path }} sset system.maintenance_mode 0 -y"
+  when:
+    - is_drush_target | default(false)
+    - runtime_bak.stat.exists
+  tags: restore
