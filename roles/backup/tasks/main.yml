@@ -11,9 +11,22 @@
     - "{{ backup_base_dir }}"
     - "{{ backup_base_dir }}/runtime"
     - "{{ backup_base_dir }}/database"
+  tags: backup
+
+- name: Set a single backup timestamp (controller-side)
+  set_fact:
+    backup_timestamp: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S%N') }}"
+  run_once: true
+  delegate_to: localhost
+  tags: [backup]
+
+- name: Share backup timestamp with all hosts
+  set_fact:
+    backup_timestamp: "{{ hostvars[groups['runtime'][0]].backup_timestamp | default(hostvars['localhost'].backup_timestamp) }}"
+  tags: [backup]
 
 
-- name: Backup Drupal runtime (shushportal)
+- name: Backup moriarty runtime (shushportal)
   become: yes
   become_user: devportal
   archive:
@@ -24,7 +37,7 @@
       - "{{ drupal_root }}/.git"
       - "{{ drupal_root }}/.ddev"
   when: is_drush_target | default(false)
-
+  tags: backup
 
 - name: Backup moriaty database (PRIMARY only)
   become: yes
@@ -41,6 +54,7 @@
   args:
     executable: /bin/bash
   when: inventory_hostname == groups['db_primary'][0]
+  tags: backup
 
 - name: Backup metabase_db database (PRIMARY only)
   become: yes
@@ -50,10 +64,11 @@
       --routines \
       --triggers \
       --events \
-      -u {{ metabase_db_user }} -p'{{ metabase_db_password }}' \
+      -u {{ db_user }} -p'{{ db_password }}' \
       metabase_db \
       | gzip -9 \
       > {{ backup_base_dir }}/database/metabase_db-{{ backup_timestamp }}.sql.gz
   args:
     executable: /bin/bash
   when: inventory_hostname == groups['db_primary'][0]
+  tags: backup

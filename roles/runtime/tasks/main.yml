@@ -261,10 +261,9 @@
     owner: devportal  # Set this to the appropriate user
     group: nginx      # Set this to the appropriate group
 
-- name: Mark whether this host is the drush target
+- name: Ensure is_drush_target is defined
   set_fact:
-    is_drush_target: >-
-      {{ (ansible_host | default(inventory_hostname)) == (drush_target_host | string) }}
+    is_drush_target: "{{ is_drush_target | default(false) }}"
 
 - name: Clear cache
   when: is_drush_target | default(false)
