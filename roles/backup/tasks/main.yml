@@ -1,4 +1,24 @@
 ---
+- name: Ensure nginx group exists on DB nodes
+  become: yes
+  group:
+    name: nginx
+    state: present
+  when: "'db_primary' in group_names or 'db_replicas' in group_names"
+  tags: backup
+
+- name: Ensure devportal user exists on DB nodes
+  become: yes
+  user:
+    name: devportal
+    group: nginx
+    shell: /sbin/nologin
+    create_home: no
+    system: yes
+    state: present
+  when: "'db_primary' in group_names or 'db_replicas' in group_names"
+  tags: backup
+
 - name: Ensure moriarty backup directory structure exists
   become: yes
   file:
@@ -38,6 +58,7 @@
       - "{{ drupal_root }}/.ddev"
   when: is_drush_target | default(false)
   tags: backup
+
 
 - name: Backup moriaty database (PRIMARY only)
   become: yes
