@@ -39,6 +39,25 @@
   when: is_drush_target | default(false)
   tags: backup
 
+- name: Ensure nginx group exists on DB nodes
+  become: yes
+  group:
+    name: nginx
+    state: present
+  when: "'db_primary' in group_names or 'db_replicas' in group_names"
+
+- name: Ensure devportal user exists on DB nodes
+  become: yes
+  user:
+    name: devportal
+    group: nginx
+    shell: /sbin/nologin
+    create_home: no
+    system: yes
+    state: present
+  when: "'db_primary' in group_names or 'db_replicas' in group_names"
+
+
 - name: Backup moriaty database (PRIMARY only)
   become: yes
   shell: |
