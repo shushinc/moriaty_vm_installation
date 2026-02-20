@@ -1,4 +1,13 @@
 ---
+# OS
+- name: Set MySQL facts per OS
+  set_fact:
+    mysql_service_name: "{{ 'mysqld' if ansible_os_family == 'RedHat' else 'mysql' }}"
+    mysql_socket: "{{ '/var/lib/mysql/mysql.sock' if ansible_os_family == 'RedHat' else '/var/run/mysqld/mysqld.sock' }}"
+    mysql_config_file: "{{ '/etc/my.cnf.d/server.cnf' if ansible_os_family == 'RedHat' else '/etc/mysql/mysql.conf.d/zz-gtid.cnf' }}"
+  tags: [mysql, mysql_install, mysql_config, mysql_prereqs]
+
+# selinux
 - name: (SELinux) ensure tools present
   package:
     name: policycoreutils-python-utils
@@ -6,41 +15,69 @@
   when: ansible_os_family == "RedHat"
   tags: [mysql, mysql_install]
 
-- name: Install MySQL server
-  dnf:
-    name: mysql-server
+# instll all req packages
+- name: Install MySQL server + prereqs (Debian/Ubuntu)
+  apt:
+    name:
+      - mysql-server
+      - python3-pymysql
     state: present
     update_cache: yes
-  tags: [mysql, mysql_install]
+  when: ansible_os_family == "Debian"
+  tags: [mysql, mysql_install, mysql_prereqs]
 
-- name: Write /etc/my.cnf.d/server.cnf (GTID + ROW, per-role differences)
+- name: Install MySQL server + prereqs (Rocky/RedHat)
+  dnf:
+    name:
+      - mysql-server
+      - python3-PyMySQL
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "RedHat"
+  tags: [mysql, mysql_install, mysql_prereqs]
+
+# GTID
+- name: Write MySQL GTID config (per-role differences)
   copy:
-    dest: /etc/my.cnf.d/server.cnf
+    dest: "{{ mysql_config_file }}"
     owner: root
     group: root
-    mode: '0644'
+    mode: "0644"
     content: |
       {% set sid = (((inventory_hostname | hash('sha1'))[0:8] | int(base=16)) % 4294967294) + 1 %}
       [mysqld]
       server-id = {{ sid }}
+
+      bind-address = 0.0.0.0
+
+      # Binlog / replication basics
+      log_bin = mysql-bin
       binlog_format = ROW
+
+      # GTID
       gtid_mode = ON
       enforce_gtid_consistency = ON
       log_replica_updates = ON
+
+      # Housekeeping
       binlog_expire_logs_seconds = 2592000
       binlog_row_image = FULL
 
       {% if inventory_hostname in groups['db_primary'] %}
       # PRIMARY
-      log_bin = mysql-bin
       innodb_flush_log_at_trx_commit = 1
       sync_binlog = 1
       {% else %}
+      # REPLICA
       relay_log = relay-bin
-      log_bin = mysql-bin
       {% endif %}
   notify: Restart MySQL
   tags: [mysql, mysql_config]
+
+- name: Flush handlers so MySQL restarts before replication configuration
+  meta: flush_handlers
+  tags: [mysql, mysql_config, mysql_seed, mysql_replication]
+
 
 - name: Ensure MySQL data dir exists and owned by mysql
   file:
@@ -48,26 +85,62 @@
     state: directory
     owner: mysql
     group: mysql
-    mode: '0700'
+    mode: "0700"
   tags: [mysql, mysql_install]
 
-- name: Restore SELinux contexts on MySQL paths
+- name: Restore SELinux contexts on MySQL paths (RedHat only)
   command: restorecon -Rv /var/lib/mysql /etc/my.cnf /etc/my.cnf.d
   changed_when: false
   failed_when: false
   when: ansible_os_family == "RedHat"
   tags: [mysql, mysql_install]
 
+#make sure server is runnning
 - name: Ensure MySQL service is enabled and running
   service:
-    name: mysqld
+    name: "{{ mysql_service_name }}"
     state: started
     enabled: yes
   tags: [mysql, mysql_install, mysql_config]
 
+
+- name: Check GTID variables (replicas)
+  community.mysql.mysql_query:
+    login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
+    query: "SELECT @@GLOBAL.gtid_mode, @@GLOBAL.enforce_gtid_consistency, @@GLOBAL.server_id"
+  register: gtid_check
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_replication, mysql_check]
+
+- name: Normalize GTID check row (replicas)
+  set_fact:
+    _gtid_row: >-
+      {{
+        (
+          gtid_check.query_result[0][0]
+          if (gtid_check.query_result is defined and gtid_check.query_result|length > 0 and gtid_check.query_result[0]|length > 0)
+          else {}
+        )
+      }}
+  when: inventory_hostname in groups['db_replicas']
+  tags: [mysql, mysql_replication, mysql_check]
+
+- name: Fail if GTID is not enabled (replicas)
+  fail:
+    msg: >-
+      GTID not enabled on {{ inventory_hostname }}.
+      Raw query_result={{ gtid_check.query_result | default('MISSING') }}
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - (_gtid_row == {}) or (_gtid_row[0] is defined and _gtid_row[0] != 'ON')
+  tags: [mysql, mysql_replication, mysql_check]
+
+# procysql user and access
 - name: (ProxySQL) Temporarily disable read_only on REPLICAS
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "SET GLOBAL super_read_only=OFF"
       - "SET GLOBAL read_only=OFF"
@@ -76,33 +149,26 @@
 
 - name: Create ProxySQL monitor user (on all DB hosts)
   community.mysql.mysql_user:
-    name: "proxysql_monitor"
+    name: proxysql_monitor
     host: "10.%"
     password: "{{ proxysql_monitor_password }}"
     priv: "*.*:USAGE"
     plugin: mysql_native_password
     state: present
     login_user: root
-  # This task must run on ALL database servers
+    login_unix_socket: "{{ mysql_socket }}"
   when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants, proxysql]
 
 - name: Grant specific monitor privileges (on all DB hosts)
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
-      # Basic monitoring
       - "GRANT SELECT ON performance_schema.threads TO 'proxysql_monitor'@'10.%'"
-      # For GTID replication monitoring
       - "GRANT SELECT ON performance_schema.replication_group_members TO 'proxysql_monitor'@'10.%'"
       - "GRANT SELECT ON performance_schema.replication_applier_status_by_worker TO 'proxysql_monitor'@'10.%'"
-      # For standard replication monitoring
       - "GRANT SELECT ON mysql.slave_master_info TO 'proxysql_monitor'@'10.%'"
-      #
-      # NOTE: Removed 'GRANT SELECT ON information_schema.SCHEMATA'
-      # This causes 1044 errors on modern MySQL versions.
-      #
-      # To check read_only status
       - "GRANT SYSTEM_VARIABLES_ADMIN ON *.* TO 'proxysql_monitor'@'10.%'"
   when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants, proxysql]
@@ -110,15 +176,18 @@
 - name: (ProxySQL) Re-enable read_only on REPLICAS
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "SET GLOBAL read_only=ON"
       - "SET GLOBAL super_read_only=ON"
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants, proxysql]
 
+# replica user - primary
+
 - name: Create replication user (primary only)
   community.mysql.mysql_user:
-    name: "repl"
+    name: repl
     host: "10.%"
     password: "{{ repl_password }}"
     priv: "*.*:REPLICATION SLAVE"
@@ -126,6 +195,7 @@
     update_password: on_create
     state: present
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   when: inventory_hostname in groups['db_primary']
   tags: [mysql, mysql_primary_init]
 
@@ -134,7 +204,7 @@
   copy:
     src: "{{ role_path }}/templates/zcs_new.sql.gz"
     dest: /tmp/zcs_new.sql.gz
-    mode: '0644'
+    mode: "0644"
   when: inventory_hostname in groups['db_primary']
   tags: [mysql, mysql_seed_external]
 
@@ -149,12 +219,11 @@
     state: import
     target: /tmp/zcs_new.sql
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   when: inventory_hostname in groups['db_primary']
   tags: [mysql, mysql_seed_external]
 
-
-# give moriarty user grants
-
+# moriarty user 
 - name: Collect web node IPs from 'runtime' group
   set_fact:
     _web_ips: >-
@@ -169,17 +238,14 @@
 
 - name: Build host grant list for Drupal user
   set_fact:
-    _drupal_grant_hosts: >-
-      {{
-        (['%','10.%'] + (_web_ips | default([])))
-        | unique
-      }}
+    _drupal_grant_hosts: "{{ (['%','10.%'] + (_web_ips | default([]))) | unique }}"
   when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants]
 
 - name: (Drupal User) Temporarily disable read_only on REPLICAS
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "SET GLOBAL super_read_only=OFF"
       - "SET GLOBAL read_only=OFF"
@@ -196,6 +262,7 @@
     update_password: on_create
     state: present
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   loop: "{{ _drupal_grant_hosts }}"
   when: inventory_hostname in groups['db_primary'] or inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants]
@@ -203,12 +270,14 @@
 - name: (Drupal User) Re-enable read_only on REPLICAS
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "SET GLOBAL read_only=ON"
       - "SET GLOBAL super_read_only=ON"
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_grants]
-  
+
+
 - name: Create GTID-aware dump on PRIMARY
   shell: >
     mysqldump --single-transaction --quick --routines --triggers
@@ -236,6 +305,7 @@
   community.mysql.mysql_replication:
     mode: stopreplica
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   ignore_errors: yes
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_seed]
@@ -243,6 +313,7 @@
 - name: RESET REPLICA ALL and RESET MASTER (force clean GTIDs)
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "RESET REPLICA ALL"
       - "RESET MASTER"
@@ -252,6 +323,7 @@
 - name: Disable read_only/super_read_only on REPLICAS for initial import
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "SET GLOBAL super_read_only=OFF"
       - "SET GLOBAL read_only=OFF"
@@ -269,18 +341,23 @@
     state: import
     target: /tmp/seed.sql
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_seed]
 
 - name: Re-enable read_only/super_read_only on REPLICAS after import
   community.mysql.mysql_query:
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
     query:
       - "SET GLOBAL read_only=ON"
       - "SET GLOBAL super_read_only=ON"
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_seed]
 
+# =========================
+# Configure replication (GTID auto-position)
+# =========================
 - name: CHANGE PRIMARY (GTID) on replicas
   community.mysql.mysql_replication:
     mode: changeprimary
@@ -290,6 +367,7 @@
     master_port: 3306
     master_auto_position: yes
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_replication]
 
@@ -297,6 +375,7 @@
   community.mysql.mysql_replication:
     mode: startreplica
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_replication]
 
@@ -304,6 +383,7 @@
   community.mysql.mysql_replication:
     mode: getreplica
     login_user: root
+    login_unix_socket: "{{ mysql_socket }}"
   register: repl_status
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_check]
@@ -313,3 +393,19 @@
     var: repl_status
   when: inventory_hostname in groups['db_replicas']
   tags: [mysql, mysql_check]
+
+- name: Check mysqld is listening on 3306
+  shell: "ss -lntp | grep ':3306 ' || true"
+  register: listen_3306
+  changed_when: false
+  when: inventory_hostname in groups['db_primary']
+  tags: [mysql, mysql_check]
+
+- name: Fail if mysqld is not listening on 0.0.0.0 / primary IP
+  fail:
+    msg: "MySQL is not listening on port 3306 externally on {{ inventory_hostname }}. ss output: {{ listen_3306.stdout }}"
+  when:
+    - inventory_hostname in groups['db_primary']
+    - listen_3306.stdout == ""
+  tags: [mysql, mysql_check]
+

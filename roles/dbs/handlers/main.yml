@@ -1,4 +1,4 @@
 - name: Restart MySQL
   service:
-    name: mysqld
+    name: "{{ (ansible_os_family == 'Debian') | ternary('mysql', 'mysqld') }}"
     state: restarted

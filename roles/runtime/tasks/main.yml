@@ -4,9 +4,17 @@
     name: "*"
     state: latest
     update_cache: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Update package index on Debian/Ubuntu
+  apt:
+    update_cache: yes
+    upgrade: dist
+  when: ansible_os_family == "Debian"
 
 - name: Set SELinux to permissive mode
   ansible.builtin.command: setenforce 0
+  when: ansible_os_family == "RedHat"
 
 - name: Ensure log directory exists
   file:
@@ -29,20 +37,78 @@
   rpm_key:
     state: present
     key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+  when: ansible_os_family == "RedHat"
 
 - name: Install EPEL repository
   dnf:
     name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
     state: present
+  when: ansible_os_family == "RedHat"
+- name: Update apt cache
+  apt:
+    update_cache: yes
+  when: ansible_os_family == "Debian"
 
+- name: Add Ondrej PHP repository (Debian/Ubuntu)
+  apt_repository:
+    repo: ppa:ondrej/php
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+  tags: [runtime, php]
+
+- name: Add Ondrej PHP repository (Debian/Ubuntu)
+  apt_repository:
+    repo: ppa:ondrej/php
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+  tags: [runtime, php]
+
+
+- name: Install PHP 8.2 and runtime packages (Debian)
+  apt:
+    name:
+      - php8.2
+      - php8.2-cli
+      - php8.2-fpm
+      - php8.2-mysql
+      - php8.2-xml
+      - php8.2-curl
+      - php8.2-gd
+      - php8.2-intl
+      - php8.2-mbstring
+      - php8.2-zip
+      - php8.2-opcache
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Set PHP 8.2 as default
+  alternatives:
+    name: php
+    path: /usr/bin/php8.2
+  when: ansible_os_family == "Debian"
+  tags: [runtime, php]
+
+- name: Restart PHP-FPM
+  service:
+    name: php8.2-fpm
+    state: restarted
+    enabled: yes
+  when: ansible_os_family == "Debian"
+  tags: [runtime, php]
 
 - name: Enable PHP 8.2 module
   command: dnf module enable php:8.2 -y
   register: php_enable
+  when: ansible_os_family == "RedHat"
 
 - name: Install PHP-8.2 module
   command: dnf module install php:8.2 -y
-  when: php_enable.rc == 0
+  when:
+    - ansible_os_family == "RedHat" 
+    - php_enable.rc == 0
 
 
 
@@ -86,6 +152,7 @@
       - patch
       - jq
     state: present
+  when: ansible_os_family == "RedHat"
 
 - name: Check if the Git repository already exists
   stat:
@@ -112,6 +179,26 @@
     force: yes
     update: yes
 
+      
+- name: Install Composer (Debian/Ubuntu)
+  apt:
+    name: composer
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+  tags: [runtime, composer]
+
+
+- name: Install Composer dependencies Debian/Ubuntu
+  command: composer install --no-interaction
+  args:
+    chdir: /var/www/html/shushportal
+  environment:
+    COMPOSER_ALLOW_SUPERUSER: "1"
+    COMPOSER_MEMORY_LIMIT: "2G"
+  when: ansible_os_family == "Debian"
+  tags: [runtime, composer]
+
 - name: Change to the project directory and install Composer dependencies
   ansible.builtin.shell: |
     cd /var/www/html/shushportal
@@ -120,6 +207,7 @@
     echo "export COMPOSER_HOME=/usr/bin/composer" >> ~/.profile 
     source ~/.profile 
     /usr/bin/composer install --no-interaction
+  when: ansible_os_family == "RedHat"
   args:
     executable: /bin/bash 
 
@@ -227,11 +315,19 @@
     create_home: yes
     system: yes
 
+- name: Set web group based on OS
+  set_fact:
+    web_user:  "{{ 'www-data' if ansible_os_family == 'Debian' else 'nginx' }}"
+    web_group: "{{ 'www-data' if ansible_os_family == 'Debian' else 'nginx' }}"
+    php_fpm_pool_file: "{{ '/etc/php/8.2/fpm/pool.d/www.conf' if ansible_os_family == 'Debian' else '/etc/php-fpm.d/www.conf' }}"
+      # php_fpm_pool_file: "{{ php_fpm_pool_file | default('/etc/php-fpm.d/www.conf' if ansible_os_family == 'RedHat' else '/etc/php/8.2/fpm/pool.d/www.conf') }}"
+  tags: [runtime, permissions]
+
 - name: Change ownership of /var/www/html
   file:
     path: /var/www/html
     owner: devportal
-    group: nginx
+    group: "{{ web_group }}"
     state: directory
     recurse: yes
 
@@ -249,7 +345,7 @@
   ansible.builtin.file:
     path: /var/www/html
     owner: devportal
-    group: nginx
+    group: "{{ web_group }}"
     recurse: yes
 
 - name: Set permissions for settings.php
@@ -257,7 +353,7 @@
     path: /var/www/html/shushportal/web/sites/default/settings.php
     mode: '0664'
     owner: devportal  # Set this to the appropriate user
-    group: nginx      # Set this to the appropriate group
+    group: "{{ web_group }}"      # Set this to the appropriate group
 
 - name: Set permissions for the default directory
   ansible.builtin.file:
@@ -265,7 +361,7 @@
     mode: '0775'
     recurse: yes
     owner: devportal  # Set this to the appropriate user
-    group: nginx      # Set this to the appropriate group
+    group: "{{ web_group }}"      # Set this to the appropriate group
 
 # - name: Run set-permissions.sh script
 #   command: /var/www/html/shushportal/set-permissions.sh --drupal_path=/var/www/html/shushportal/web --drupal_user=devportal --httpd_group=nginx
@@ -500,13 +596,86 @@
     var: drush_cr_output_final.stdout_lines
   when: inventory_hostname == drush_target_host 
 
+- name: Change PHP-FPM user/group (Debian)
+  command: >
+    sed -i
+    -e 's/^user = www-data/user = {{ web_user }}/'
+    -e 's/^group = www-data/group = {{ web_group }}/'
+    /etc/php/8.2/fpm/pool.d/www.conf
+  when: ansible_os_family == "Debian"
+
 - name: Change PHP-FPM user and group to nginx
   command: sed -i -e 's/^user = apache/user = nginx/' -e 's/^group = apache/group = nginx/' /etc/php-fpm.d/www.conf
+  when: ansible_os_family == "RedHat"
+
+- name: Set PHP-FPM service name based on OS
+  set_fact:
+    php_fpm_service: "{{ 'php-fpm' if ansible_os_family == 'RedHat' else 'php8.2-fpm' }}"
+  tags: [runtime, php-fpm]
 
 - name: Restart PHP-FPM service
-  systemd:
-    name: php-fpm
+  ansible.builtin.systemd:
+    name: "{{ php_fpm_service }}"
     state: restarted
+  when: php_fpm_service is defined
+  tags: [runtime, php-fpm]
+
+
+    #- name: Restart PHP-FPM service
+    #systemd:
+    #name: php-fpm
+    #state: restarted
+
+- name: Set Nginx user based on OS
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^user\s+'
+    line: "user {{ web_user }};"
+  notify: Reload Nginx
+  tags: [runtime, nginx]
+
+- name: Remove default Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  when: ansible_os_family == "Debian"
+  notify:
+    - Test nginx
+    - Reload nginx
+
+- name: Set ownership of Drupal directory
+  ansible.builtin.file:
+    path: /var/www/html/shushportal
+    owner: devportal
+    group: www-data
+    recurse: yes
+  when: ansible_os_family == "Debian"
+
+- name: Deploy Drupal Nginx vhost
+  ansible.builtin.template:
+    src: drupal-nginx.conf.j2
+    dest: /etc/nginx/sites-enabled/drupal-nginx.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: ansible_os_family == "Debian"
+  notify:
+    - Test nginx
+    - Reload Nginx
+
+
+- name: Test Nginx configuration
+  ansible.builtin.command: nginx -t
+  register: nginx_test
+  changed_when: false
+  tags: [runtime, nginx]
+
+- name: Reload Nginx New
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when: nginx_test.rc == 0
+  tags: [runtime, nginx]
 
 - name: Reload Nginx
   ansible.builtin.systemd:
@@ -525,15 +694,25 @@
     name: httpd_can_network_connect_db
     state: yes
     persistent: yes
+  when: ansible_os_family == "RedHat"
 
 - name: Ensure Nginx and PHP-FPM start on boot
-  systemd:
+  ansible.builtin.systemd:
     name: "{{ item }}"
     enabled: yes
     state: started
   loop:
     - nginx
-    - php-fpm
+    - "{{ php_fpm_service }}"
+
+    #- name: Ensure Nginx and PHP-FPM start on boot
+    #systemd:
+    # name: "{{ item }}"
+    #enabled: yes
+    #state: started
+    #loop:
+    #- nginx
+    #- php-fpm
 
 # - name: Run Supervisor with Drupal configuration
 #   command: supervisord --nodaemon -c /etc/drupal_supervisor.conf

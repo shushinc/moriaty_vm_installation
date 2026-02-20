@@ -1,9 +1,16 @@
 # --- Packages ---------------------------------------------------------------
+- name: Update packages (Debian)
+  ansible.builtin.apt:
+    update_cache: yes
+    upgrade: dist
+  when: ansible_os_family == "Debian"
+
 - name: Update packages (RHEL/Rocky 9)
   ansible.builtin.dnf:
     name: "*"
     state: latest
     update_cache: yes
+  when: ansible_os_family == "RedHat"
 
 - name: Ensure Java 21 (and headless) are installed
   ansible.builtin.dnf:
@@ -11,6 +18,15 @@
       - java-21-openjdk
       - java-21-openjdk-headless
     state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure Java 21 (headless) is installed (Debian)
+  ansible.builtin.apt:
+    name:
+      - openjdk-21-jdk-headless
+    state: present
+  when: ansible_os_family == "Debian"
+
 
 # --- Locate java ------------------------------------------------------------
 - name: Find Java 21 binary via RPM (headless)

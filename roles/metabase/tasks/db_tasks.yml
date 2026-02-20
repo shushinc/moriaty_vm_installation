@@ -39,6 +39,93 @@
       - unzip  # Needed to extract the .zip dump
     state: present
     update_cache: yes
+  when: ansible_os_family == "RedHat"  
+
+- name: Install MySQL server and dependencies (Debian)
+  ansible.builtin.apt:
+    name:
+      - mysql-server
+      - python3-pymysql
+      - unzip
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Ensure MySQL config directory exists (Debian)
+  ansible.builtin.file:
+    path: /etc/mysql/mysql.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: ansible_os_family == "Debian"
+
+- name: Write MySQL server config (GTID + ROW) - Debian
+  ansible.builtin.copy:
+    dest: /etc/mysql/mysql.conf.d/server.cnf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      {% set sid = (((inventory_hostname | hash('sha1'))[0:8] | int(base=16)) % 4294967294) + 1 %}
+      [mysqld]
+      server-id = {{ server_id | default(sid) }}
+      binlog_format = ROW
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      log_replica_updates = ON
+      binlog_expire_logs_seconds = 2592000
+      binlog_row_image = FULL
+
+      {% if inventory_hostname in groups['db_primary'] %}
+      # PRIMARY
+      log_bin = mysql-bin
+      innodb_flush_log_at_trx_commit = 1
+      sync_binlog = 1
+      {% else %}
+      # REPLICA
+      read_only = ON
+      super_read_only = ON
+      relay_log = relay-bin
+      log_bin = mysql-bin
+      {% endif %}
+  register: mysql_config_change
+  when: ansible_os_family == "Debian"
+  notify: Restart MySQL
+
+- name: Write MySQL server config (GTID + ROW) - Debian
+  ansible.builtin.copy:
+    dest: /etc/mysql/mysql.conf.d/server.cnf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      {% set sid = (((inventory_hostname | hash('sha1'))[0:8] | int(base=16)) % 4294967294) + 1 %}
+      [mysqld]
+      server-id = {{ server_id | default(sid) }}
+      binlog_format = ROW
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      log_replica_updates = ON
+      binlog_expire_logs_seconds = 2592000
+      binlog_row_image = FULL
+
+      {% if inventory_hostname in groups['db_primary'] %}
+      # PRIMARY
+      log_bin = mysql-bin
+      innodb_flush_log_at_trx_commit = 1
+      sync_binlog = 1
+      {% else %}
+      # REPLICA
+      read_only = ON
+      super_read_only = ON
+      relay_log = relay-bin
+      log_bin = mysql-bin
+      {% endif %}
+  register: mysql_config_change
+  when: ansible_os_family == "Debian"
+  notify: Restart MySQL
+
 
 - name: Write /etc/my.cnf.d/server.cnf (GTID + ROW, per-role differences)
   ansible.builtin.copy:
@@ -70,6 +157,7 @@
       log_bin = mysql-bin
       {% endif %}
   register: mysql_config_change
+  when: ansible_os_family == "RedHat"
 
 - name: Ensure MySQL data dir exists and owned by mysql
   ansible.builtin.file:
@@ -90,6 +178,14 @@
     name: mysqld
     state: started
     enabled: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure MySQL service is enabled and running (Debian)
+  ansible.builtin.service:
+    name: mysql
+    state: started
+    enabled: yes
+  when: ansible_os_family == "Debian"      
 
 - name: Restart mysqld if config changed
   ansible.builtin.service:
@@ -111,21 +207,77 @@
     update_password: on_create
     state: present
     login_user: root
-  when: inventory_hostname in groups['db_primary']
+  when:
+    -  ansible_os_family == "RedHat" 
+    -  inventory_hostname in groups['db_primary']
 
+- name: Create replication user (primary only) Debian
+  community.mysql.mysql_user:
+    name: "{{ repl_user }}"
+    host: "%"
+    password: "{{ repl_password }}"
+    priv: "*.*:REPLICATION SLAVE"
+    plugin: mysql_native_password
+    update_password: on_create
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "Debian"
+    
+    
 - name: Create Metabase database (primary only)
   community.mysql.mysql_db:
     name: "{{ metabase_db_name }}"
     state: present
     login_user: root
-  when: inventory_hostname in groups['db_primary']
+  when:
+    - inventory_hostname in groups['db_primary']
+    -  ansible_os_family == "RedHat"
+
+- name: Create Metabase database (primary only) — Debian
+  community.mysql.mysql_db:
+    name: "{{ metabase_db_name }}"
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "Debian"
+
+- name: Check if metabase_database table exists (PRIMARY) — Debian
+  community.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    query: >
+      SELECT COUNT(1) AS c
+      FROM information_schema.tables
+      WHERE table_schema = '{{ metabase_db_name }}'
+        AND table_name = 'metabase_database';
+  register: mb_table_check
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "Debian"
 
 - name: Check if metabase_database table exists (PRIMARY)
   community.mysql.mysql_query:
     login_user: root
     query: "SELECT COUNT(1) as c FROM information_schema.tables WHERE table_schema = '{{ metabase_db_name }}' AND table_name = 'metabase_database';"
   register: mb_table_check
-  when: inventory_hostname in groups['db_primary']
+  when:
+    - inventory_hostname in groups['db_primary']
+    -  ansible_os_family == "RedHat"
+
+- name: Ensure Metabase user (primary only) — Debian
+  community.mysql.mysql_user:
+    name: "{{ metabase_db_user }}"
+    host: "%"
+    password: "{{ metabase_db_password }}"
+    priv: "{{ metabase_db_name }}.*:ALL"
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "Debian"
+      
 
 - name: Ensure Metabase user (primary only)
   community.mysql.mysql_user:
@@ -137,17 +289,48 @@
     update_password: on_create
     state: present
     login_user: root
-  when: inventory_hostname in groups['db_primary']
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "RedHat"
 
-- name: Copy Metabase SQL dump (ZIP) to PRIMARY
+- name: Normalize metabase table count Debian
+  set_fact:
+    metabase_table_count: "{{ mb_table_check.results[0].rows[0].c | int }}"
+  when:
+    - inventory_hostname in groups['db_primary']
+    - mb_table_check.query_result is defined
+    - ansible_os_family == "Debian"
+
+- name: Normalize Metabase table count (RedHat)
+  set_fact:
+    metabase_table_count: "{{ mb_table_check.query_result[0][0].c | int }}"
+  when:
+    - ansible_os_family == "RedHat"
+    - inventory_hostname in groups['db_primary']
+    - mb_table_check.query_result is defined
+
+      
+- name: Copy Metabase SQL dump (ZIP) to PRIMARY Debian
   ansible.builtin.copy:
     src: "{{ role_path }}/templates/metabase_db.sql.zip"
     dest: "{{ sql_zip_path }}"
     mode: "0644"
   when:
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) == 0
+    - metabase_table_count | default(0) == 0
+    - ansible_os_family == "Debian"
 
+- name: Copy Metabase SQL dump (ZIP) to PRIMARY RedHat
+  ansible.builtin.copy:
+    src: "{{ role_path }}/templates/metabase_db.sql.zip"
+    dest: "{{ sql_zip_path }}"
+    mode: "0644"
+  when:
+    - inventory_hostname in groups['db_primary']
+      #- (mb_table_check.query_result[0][0].c | int) == 0
+    - metabase_table_count | default(0) == 0
+    - ansible_os_family == "RedHat"
+      
 - name:  Unzip Metabase dump on PRIMARY
   ansible.builtin.unarchive:
     src: "{{ sql_zip_path }}"
@@ -156,9 +339,10 @@
     creates: "{{ sql_extract_file }}"
   when:
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) == 0
+    - metabase_table_count | default(0) == 0
+      #- (mb_table_check.query_result[0][0].c | int) == 0
 
-- name: Import Metabase dump into PRIMARY
+- name: Import Metabase dump into PRIMARY RedHat
   community.mysql.mysql_db:
     name: "{{ metabase_db_name }}"
     state: import
@@ -166,9 +350,23 @@
     login_user: root
   when:
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) == 0
+    - metabase_table_count | default(0) == 0
+    - ansible_os_family == "RedHat"
+      #- (mb_table_check.query_result[0][0].c | int) == 0
 
-- name: Fix Metabase's internal connection to its OWN db (primary only)
+- name: Import Metabase dump into PRIMARY (Debian)
+  community.mysql.mysql_db:
+    name: "{{ metabase_db_name }}"
+    state: import
+    target: "{{ sql_extract_file }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "Debian"
+    - metabase_table_count | default(0) == 0
+
+
+- name: Fix Metabase's internal connection to its OWN db (primary only) RedHat
   community.mysql.mysql_query:
     login_user: root
     query: >
@@ -179,8 +377,30 @@
         '$.password', '{{ metabase_db_password }}'
       ) WHERE name = 'metabase';
   when:
+    - ansible_os_family == "RedHat"
     - inventory_hostname in groups['db_primary']
-    - (mb_table_check.query_result[0][0].c | int) > 0  # Only run if table exists
+    - metabase_table_count is defined
+    - metabase_table_count | int > 0
+      #- (mb_table_check.query_result[0][0].c | int) > 0  # Only run if table exists
+
+- name: Fix Metabase's internal connection to its OWN db (primary only) Debian
+  community.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    query: >
+      UPDATE {{ metabase_db_name }}.metabase_database
+      SET details = JSON_SET(
+        details,
+        '$.host',     '{{ db_host_primary }}',
+        '$.user',     '{{ metabase_db_user }}',
+        '$.password', '{{ metabase_db_password }}'
+      )
+      WHERE name = 'metabase';
+  when:
+    - ansible_os_family == "Debian"
+    - inventory_hostname in groups['db_primary']
+    - metabase_table_count is defined
+    - metabase_table_count | int > 0
+
 
 # ==============================================================================
 # SECTION 4: SEED REPLICAS (ALL DB NODES)
@@ -193,33 +413,96 @@
     --databases {{ metabase_db_name }} | gzip > {{ sql_seed_dump_path }}
   when: inventory_hostname in groups['db_primary']
 
+- name: Fetch seed dump to controller (Debian)
+  ansible.builtin.fetch:
+    src: "{{ sql_seed_dump_path }}"
+    dest: "{{ controller_seed_dump_path }}"
+    flat: yes
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_facts.os_family == "Debian"
+  run_once: true
+
+      
 - name: Fetch seed dump to controller
   ansible.builtin.fetch:
     src: "{{ sql_seed_dump_path }}"
     dest: "{{ controller_seed_dump_path }}"
     flat: yes
-  when: inventory_hostname in groups['db_primary']
+  when:
+    - inventory_hostname in groups['db_primary']
+    - ansible_os_family == "RedHat"
 
-- name: Push seed dump to REPLICAS
+- name: Push seed dump to REPLICAS (Debian)
   ansible.builtin.copy:
     src: "{{ controller_seed_dump_path }}"
     dest: "{{ sql_seed_dump_path }}"
-  when: inventory_hostname in groups['db_replicas']
+    owner: mysql
+    group: mysql
+    mode: '0644'
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_facts.os_family == "Debian"
+      
+
+- name: Push seed dump to REPLICAS RedHat
+  ansible.builtin.copy:
+    src: "{{ controller_seed_dump_path }}"
+    dest: "{{ sql_seed_dump_path }}"
+  when:
+    - inventory_hostname in groups['db_replicas']
+    -  ansible_os_family == "RedHat"
+
+- name: STOP REPLICA on replicas (Debian)
+  community.mysql.mysql_replication:
+    mode: stopreplica
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  ignore_errors: yes
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+
 
 - name: STOP REPLICA on replicas (ignore if clean)
   community.mysql.mysql_replication:
     mode: stopreplica
     login_user: root
   ignore_errors: yes
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_facts.os_family == "RedHat"
 
+- name: RESET REPLICA ALL and RESET MASTER (Debian)
+  community.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    query:
+      - "RESET REPLICA ALL"
+      - "RESET MASTER"
+  when:
+    - ansible_os_family == "Debian"
+    - inventory_hostname in groups['db_replicas']
+
+      
 - name: RESET REPLICA ALL and RESET MASTER (force clean GTIDs)
   community.mysql.mysql_query:
     login_user: root
     query:
       - "RESET REPLICA ALL"
       - "RESET MASTER"
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    -  inventory_hostname in groups['db_replicas']
+    -  ansible_os_family == "RedHat"
+
+- name: Disable read_only/super_read_only on REPLICAS (Debian)
+  community.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    query:
+      - "SET GLOBAL super_read_only=OFF"
+      - "SET GLOBAL read_only=OFF"
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+
 
 - name: Disable read_only/super_read_only on REPLICAS for initial import
   community.mysql.mysql_query:
@@ -227,7 +510,9 @@
     query:
       - "SET GLOBAL super_read_only=OFF"
       - "SET GLOBAL read_only=OFF"
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    -  inventory_hostname in groups['db_replicas']
+    -  ansible_os_family == "RedHat"
 
 - name: Ensure plain SQL exists on REPLICAS
   ansible.builtin.shell: gunzip -c {{ sql_seed_dump_path }} > {{ sql_extract_file }}
@@ -235,13 +520,37 @@
     creates: "{{ sql_extract_file }}"
   when: inventory_hostname in groups['db_replicas']
 
+- name: Import plain SQL on REPLICAS (GTID) — Debian
+  community.mysql.mysql_db:
+    name: "{{ metabase_db_name }}"
+    state: import
+    target: "{{ sql_extract_file }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+
+
 - name: Import plain SQL on REPLICAS (applies SET @@GLOBAL.GTID_PURGED)
   community.mysql.mysql_db:
     name: "{{ metabase_db_name }}"
     state: import
     target: "{{ sql_extract_file }}"
     login_user: root
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "RedHat"
+
+- name: Re-enable read_only/super_read_only on REPLICAS after import (Debian)
+  community.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    query:
+      - "SET GLOBAL read_only=ON"
+      - "SET GLOBAL super_read_only=ON"
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+
 
 - name: Re-enable read_only/super_read_only on REPLICAS after import
   community.mysql.mysql_query:
@@ -249,11 +558,27 @@
     query:
       - "SET GLOBAL read_only=ON"
       - "SET GLOBAL super_read_only=ON"
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "RedHat"
 
 # ==============================================================================
 # SECTION 5: START & VERIFY REPLICATION (REPLICAS ONLY)
 # ==============================================================================
+
+- name: CHANGE PRIMARY (GTID) on replicas (Debian)
+  community.mysql.mysql_replication:
+    mode: changeprimary
+    master_host: "{{ hostvars[groups['db_primary'][0]].ansible_host | default(groups['db_primary'][0]) }}"
+    master_user: "{{ repl_user }}"
+    master_password: "{{ repl_password }}"
+    master_port: 3306
+    master_auto_position: yes
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+
 
 - name: CHANGE PRIMARY (GTID) on replicas
   community.mysql.mysql_replication:
@@ -264,32 +589,98 @@
     master_port: 3306
     master_auto_position: yes
     login_user: root
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "RedHat"
+
+- name: START REPLICA on replicas (Debian)
+  community.mysql.mysql_replication:
+    mode: startreplica
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+      
 
 - name: START REPLICA on replicas
   community.mysql.mysql_replication:
     mode: startreplica
     login_user: root
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "RedHat"
 
+- name: Get replication status (replicas) (Debian)
+  community.mysql.mysql_replication:
+    mode: getreplica
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  register: repl_status
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+      
+      
 - name: Get replication status (replicas)
   community.mysql.mysql_replication:
     mode: getreplica
     login_user: root
   register: repl_status
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "RedHat"
 
-- name: Show replication summary (replicas)
+- name: Debug replication status (Debian)
+  ansible.builtin.debug:
+    msg:
+      - "IO Thread Running: {{ repl_status.Replica_IO_Running | default('UNKNOWN') }}"
+      - "SQL Thread Running: {{ repl_status.Replica_SQL_Running | default('UNKNOWN') }}"
+      - "Last Error: {{ repl_status.Last_Error | default('None') }}"
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+    - repl_status.skipped is not defined
+      
+      
+- name: Show replication summary (replicas) Debian
+  ansible.builtin.debug:
+    msg:
+      - "IO Thread Running: {{ repl_status.replica_status.Replica_IO_Running }}"
+      - "SQL Thread Running: {{ repl_status.replica_status.Replica_SQL_Running }}"
+      - "Last Error: {{ repl_status.replica_status.Last_Error | default('None') }}"
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - repl_status.replica_status is defined      
+    - ansible_os_family == "Debian"
+
+- name: Show replication summary (replicas) RedHat
   ansible.builtin.debug:
     msg:
       - "IO Thread Running: {{ repl_status.Replica_IO_Running | default('Error') }}"
       - "SQL Thread Running: {{ repl_status.Replica_SQL_Running | default('Error') }}"
       - "Last Error: {{ repl_status.Last_Error | default('None') }}"
-  when: inventory_hostname in groups['db_replicas']
+  when:
+    -  inventory_hostname in groups['db_replicas']
+    -  ansible_os_family == "RedHat"
 
-- name: Fail if replica is broken
+- name: Fail if replica is broken (Debian)
+  ansible.builtin.fail:
+    msg: >
+      Replication is broken!
+      IO={{ repl_status.Replica_IO_Running | default('UNKNOWN') }},
+      SQL={{ repl_status.Replica_SQL_Running | default('UNKNOWN') }},
+      Error={{ repl_status.Last_Error | default('None') }}
+  when:
+    - inventory_hostname in groups['db_replicas']
+    - ansible_os_family == "Debian"
+    - repl_status.skipped is not defined
+    - repl_status.Replica_IO_Running != 'Yes'
+      or repl_status.Replica_SQL_Running != 'Yes'
+
+
+- name: Fail if replica is broken RedHat
   ansible.builtin.fail:
     msg: "Replication is broken! IO or SQL thread is not 'Yes'."
   when:
     - inventory_hostname in groups['db_replicas']
     - (repl_status.Replica_IO_Running | default('No')) != 'Yes' or (repl_status.Replica_SQL_Running | default('No')) != 'Yes'
+    - ansible_os_family == "RedHat"
